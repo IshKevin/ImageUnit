@@ -9,12 +9,13 @@ import { GalleriesTab } from '@/components/event/galleries-tab';
 import { PhotosTab } from '@/components/event/photos-tab';
 import { SettingsTab } from '@/components/event/settings-tab';
 import { StatsTab } from '@/components/event/stats-tab';
+import { DeveloperTab } from '@/components/event/developer-tab';
 import { Badge, EmptyState, Loading, PageHeader, Tabs, statusTone } from '@/components/ui';
 import { get, type EventItem } from '@/lib/api';
 import { date, label } from '@/lib/format';
 import { can, useMe } from '@/lib/auth';
 
-type Tab = 'photos' | 'galleries' | 'settings' | 'stats';
+type Tab = 'photos' | 'galleries' | 'settings' | 'stats' | 'developer';
 
 export default function EventDetail() {
   const { id } = useParams<{ id: string }>();
@@ -29,6 +30,8 @@ export default function EventDetail() {
     { id: 'galleries', label: 'Galleries' },
     { id: 'settings', label: 'Settings & sharing' },
     ...(can(user, 'stats:view') ? [{ id: 'stats' as const, label: 'Statistics' }] : []),
+    // Administrator-only: API access details for this event.
+    ...(user?.role === 'admin' ? [{ id: 'developer' as const, label: 'Developer' }] : []),
   ];
   return (
     <>
@@ -46,6 +49,7 @@ export default function EventDetail() {
       {tab === 'galleries' && <GalleriesTab event={data} />}
       {tab === 'settings' && <SettingsTab event={data} />}
       {tab === 'stats' && <StatsTab eventId={data.id} />}
+      {tab === 'developer' && user?.role === 'admin' && <DeveloperTab eventId={data.id} />}
     </>
   );
 }

@@ -10,8 +10,8 @@ import { effectiveDownloadPolicy, isPubliclyAvailable } from '../lib/access.js';
 import { hashApiKey, signMedia, verifyMedia, type Scope } from '../lib/api-keys.js';
 import { AppError, forbidden, notFound, unauthorized } from '../lib/errors.js';
 import { track } from '../lib/public-access.js';
+import { createWebsiteViews } from '../lib/website-views.js';
 
-const MEDIA_URL_TTL = 3600;
 const memoryWindows = new Map<string, number>();
 
 /**
@@ -74,105 +74,28 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
     }
   });
 
-  /** Events a client may see: available now, never private, and within the client's allow-list. */
-  function visibleEvents(client: ApiClient, listing: boolean): SQL[] {
-    const conds: SQL[] = [
-      eq(events.status, 'active'),
-      sql`(${events.expiresAt} is null or ${events.expiresAt} > now())`,
-      ne(events.visibility, 'private'),
-    ];
-    if (client.allowedEventIds?.length) conds.push(inArray(events.id, client.allowedEventIds));
-    // Unlisted events are reachable by id but never enumerated, unless explicitly allow-listed.
-    else if (listing) conds.push(eq(events.visibility, 'public'));
-    return conds;
-  }
-
-  async function loadEvent(client: ApiClient, idOrSlug: string): Promise<Event> {
-    const where = isUuid(idOrSlug) ? eq(events.id, idOrSlug) : eq(events.slug, idOrSlug.toLowerCase());
-    const [ev] = await ctx.db.select().from(events).where(and(where, ...visibleEvents(client, false)));
-    if (!ev || !isPubliclyAvailable(ev)) throw notFound('Event not found');
-    return ev;
-  }
-
-  const mediaUrl = (client: ApiClient, photoId: string, kind: 'thumbnail' | 'preview' | 'download') => {
-    const exp = Math.floor(Date.now() / 1000) + MEDIA_URL_TTL;
-    const sig = signMedia(ctx.config.SESSION_SECRET, { photoId, kind, clientId: client.id, exp });
-    return `${ctx.config.API_PUBLIC_URL}/api/v1/media/${photoId}/${kind}?c=${client.id}&exp=${exp}&sig=${sig}`;
-  };
-
-  const eventJson = (e: Event) => ({
-    id: e.id,
-    slug: e.slug,
-    name: e.name,
-    description: e.description,
-    date: e.eventDate,
-    location: e.location,
-    downloadPolicy: e.downloadPolicy,
-    expiresAt: e.expiresAt,
-    publicUrl: `${ctx.config.PUBLIC_WEB_URL}/e/${e.slug}`,
-  });
+  const views = createWebsiteViews(ctx);
+  const { visibleEvents, loadEvent } = views;
 
   app.get('/v1/events', { preHandler: authenticate('events:read') }, async (req) => {
-    const client = req.apiClient!;
-    const q = parse(z.object({ page: z.coerce.number().optional(), pageSize: z.coerce.number().optional() }), req.query);
-    const { limit, offset, page, pageSize } = pageParams(q);
-    const where = and(...visibleEvents(client, true));
-    const [rows, [{ total } = { total: 0 }]] = await Promise.all([
-      ctx.db.select().from(events).where(where).orderBy(sql`${events.eventDate} desc nulls last`, asc(events.id)).limit(limit).offset(offset),
-      ctx.db.select({ total: count() }).from(events).where(where),
-    ]);
-    return { items: rows.map(eventJson), total, page, pageSize };
+    const query = parse(z.object({ page: z.coerce.number().optional(), pageSize: z.coerce.number().optional() }), req.query);
+    return views.listEvents(req.apiClient!, query);
   });
 
   app.get('/v1/events/:id', { preHandler: authenticate('events:read') }, async (req) => ({
-    event: eventJson(await loadEvent(req.apiClient!, (req.params as { id: string }).id)),
+    event: views.eventJson(await loadEvent(req.apiClient!, (req.params as { id: string }).id)),
   }));
 
   app.get('/v1/events/:id/galleries', { preHandler: authenticate('galleries:read') }, async (req) => {
     const ev = await loadEvent(req.apiClient!, (req.params as { id: string }).id);
-    const rows = await ctx.db
-      .select({
-        g: galleries,
-        n: sql<number>`(select count(*) from ${photos} where ${photos.galleryId} = ${q(galleries.id)} and ${photos.status} = 'ready' and ${photos.isHidden} = false)::int`,
-      })
-      .from(galleries)
-      .where(and(eq(galleries.eventId, ev.id), eq(galleries.isVisible, true)))
-      .orderBy(asc(galleries.sortOrder));
-    return { items: rows.map(({ g, n }) => ({ id: g.id, name: g.name, description: g.description, photoCount: n })) };
+    return views.galleriesOf(ev);
   });
 
   app.get('/v1/events/:id/photos', { preHandler: authenticate('images:read') }, async (req) => {
     const client = req.apiClient!;
-    const q = parse(z.object({ galleryId: z.string().uuid().optional(), page: z.coerce.number().optional(), pageSize: z.coerce.number().optional() }), req.query);
+    const query = parse(z.object({ galleryId: z.string().uuid().optional(), page: z.coerce.number().optional(), pageSize: z.coerce.number().optional() }), req.query);
     const ev = await loadEvent(client, (req.params as { id: string }).id);
-    const { limit, offset, page, pageSize } = pageParams(q);
-    const conds: SQL[] = [eq(photos.eventId, ev.id), eq(photos.status, 'ready'), eq(photos.isHidden, false), sql`(${photos.galleryId} is null or ${galleries.isVisible})`];
-    if (q.galleryId) conds.push(eq(photos.galleryId, q.galleryId));
-    const where = and(...conds);
-    const [rows, [{ total } = { total: 0 }]] = await Promise.all([
-      ctx.db.select({ p: photos, g: galleries }).from(photos).leftJoin(galleries, eq(galleries.id, photos.galleryId)).where(where)
-        .orderBy(asc(photos.sortOrder), asc(photos.takenAt), asc(photos.createdAt), asc(photos.id)).limit(limit).offset(offset),
-      ctx.db.select({ total: count() }).from(photos).leftJoin(galleries, eq(galleries.id, photos.galleryId)).where(where),
-    ]);
-    const canDownload = client.scopes.includes('downloads:read');
-    return {
-      items: rows.map(({ p, g }) => ({
-        id: p.id,
-        galleryId: p.galleryId,
-        filename: p.filename,
-        width: p.width,
-        height: p.height,
-        takenAt: p.takenAt,
-        urls: {
-          thumbnail: mediaUrl(client, p.id, 'thumbnail'),
-          preview: mediaUrl(client, p.id, 'preview'),
-          download: canDownload && effectiveDownloadPolicy(ev, g, p) !== 'disabled' ? mediaUrl(client, p.id, 'download') : null,
-        },
-      })),
-      total,
-      page,
-      pageSize,
-    };
+    return views.photosOf(client, ev, query);
   });
 
   // Media is delivered through signed, expiring URLs. Each hit re-validates the credential, the event and the download policy.

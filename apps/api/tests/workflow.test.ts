@@ -363,3 +363,75 @@ describe('sharing and stats', () => {
     expect(me).toMatchObject({ events: 1, photos: 1, downloads: 1 });
   });
 });
+
+describe('admin developer tools', () => {
+  async function setup() {
+    const owner = await session(t);
+    const admin = await session(t, 'admin');
+    const ev = await makeEvent(owner, { downloadPolicy: 'full' });
+    await readyPhoto(t, owner, ev.id);
+    await readyPhoto(t, owner, ev.id);
+    const site = (await admin.post('/api/admin/websites', { name: `Dev ${Math.random()}`, scopes: ['events:read', 'galleries:read', 'images:read'] })).json();
+    return { owner, admin, ev, site };
+  }
+
+  it('is administrator-only, even for the event owner', async () => {
+    const { owner, ev, site } = await setup();
+    expect((await owner.get(`/api/admin/events/${ev.id}/developer`)).statusCode).toBe(403);
+    expect((await owner.get(`/api/admin/events/${ev.id}/developer/preview?clientId=${site.website.id}&resource=event`)).statusCode).toBe(403);
+    expect((await t.app.inject({ method: 'GET', url: `/api/admin/events/${ev.id}/developer` })).statusCode).toBe(401);
+  });
+
+  it('explains whether and why an event is exposed, and which websites can reach it', async () => {
+    const { owner, admin, ev, site } = await setup();
+    let dev = (await admin.get(`/api/admin/events/${ev.id}/developer`)).json();
+    expect(dev.exposure.exposed).toBe(false); // draft
+    expect(dev.exposure.reason).toMatch(/draft/);
+    expect(dev.endpoints.map((e: { key: string }) => e.key)).toEqual(['event', 'galleries', 'photos', 'media']);
+    expect(dev.endpoints[0].url).toContain(`/api/v1/events/${ev.id}`);
+
+    await publish(owner, ev.id);
+    dev = (await admin.get(`/api/admin/events/${ev.id}/developer`)).json();
+    expect(dev.exposure.exposed).toBe(true);
+    const mine = dev.websites.find((w: { id: string }) => w.id === site.website.id);
+    expect(mine.canAccess).toBe(true);
+    expect(JSON.stringify(dev)).not.toContain(site.apiKey); // secrets are never returned
+
+    await admin.patch(`/api/admin/websites/${site.website.id}`, { allowedEventIds: [(await makeEvent(owner)).id] });
+    dev = (await admin.get(`/api/admin/events/${ev.id}/developer`)).json();
+    expect(dev.websites.find((w: { id: string }) => w.id === site.website.id).canAccess).toBe(false);
+  });
+
+  it('preview returns exactly what the website receives from the real API', async () => {
+    const { owner, admin, ev, site } = await setup();
+    await publish(owner, ev.id);
+    const real = async (path: string) => (await t.app.inject({ method: 'GET', url: `/api/v1${path}`, headers: { authorization: `Bearer ${site.apiKey}` } })).json();
+    const preview = async (resource: string) => (await admin.get(`/api/admin/events/${ev.id}/developer/preview?clientId=${site.website.id}&resource=${resource}`)).json();
+
+    const p = await preview('photos');
+    expect(p.status).toBe(200);
+    const r = await real(`/events/${ev.id}/photos?pageSize=25`);
+    expect(p.body.items.map((i: { id: string }) => i.id)).toEqual(r.items.map((i: { id: string }) => i.id));
+    expect(p.body.total).toBe(r.total);
+    expect((await preview('event')).body.event.id).toBe(ev.id);
+    expect((await preview('galleries')).body.items[0].name).toBe('General');
+  });
+
+  it('preview reports what the API would do: missing scope, hidden event, and refuses dead credentials', async () => {
+    const { owner, admin, ev, site } = await setup();
+    const narrow = (await admin.post('/api/admin/websites', { name: `Narrow ${Math.random()}`, scopes: ['events:read'] })).json();
+    await publish(owner, ev.id);
+    const url = (id: string, resource: string) => `/api/admin/events/${ev.id}/developer/preview?clientId=${id}&resource=${resource}`;
+    const denied = (await admin.get(url(narrow.website.id, 'photos'))).json();
+    expect(denied).toMatchObject({ status: 403 });
+
+    const priv = await makeEvent(owner, { visibility: 'private', password: 'secret-pass' });
+    await readyPhoto(t, owner, priv.id);
+    await publish(owner, priv.id);
+    const hidden = (await admin.get(`/api/admin/events/${priv.id}/developer/preview?clientId=${site.website.id}&resource=event`)).json();
+    expect(hidden).toMatchObject({ status: 404 });
+
+    await admin.post(`/api/admin/websites/${site.website.id}/revoke`);
+    expect((await admin.get(url(site.website.id, 'event'))).statusCode).toBe(409);
+  });
+});

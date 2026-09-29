@@ -14,6 +14,7 @@ import { UsageRecorder } from './lib/usage.js';
 import { adminRoutes } from './modules/admin.js';
 import { authRoutes } from './modules/auth.js';
 import { clientRoutes } from './modules/clients.js';
+import { developerRoutes } from './modules/developer.js';
 import { eventRoutes } from './modules/events.js';
 import { galleryRoutes } from './modules/galleries.js';
 import { photoRoutes } from './modules/photos.js';
@@ -99,6 +100,7 @@ export async function buildApp(ctx: AppContext, opts: { rateLimitMax?: number } 
       await api.register(photoRoutes);
       await api.register(publicRoutes);
       await api.register(clientRoutes);
+      await api.register(developerRoutes);
       await api.register(adminRoutes);
       await api.register(statsRoutes);
       await api.register(websiteApiRoutes, { usage });

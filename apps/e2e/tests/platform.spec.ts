@@ -337,6 +337,35 @@ test.describe('Administrator: oversight, lifecycle and deletion', () => {
     await expect(admin.page.getByRole('img', { name: 'IMG_003.jpg' })).toBeVisible();
   });
 
+  test('Developer tab: admin sees API details and previews exactly what a website receives; photographers do not', async () => {
+    const created = await admin.page.request.post('/api/admin/websites', { data: { name: `Dev Preview Site ${stamp}` } });
+    expect(created.status()).toBe(201);
+
+    // Photographers (even the owner) get no Developer tab and no API access to it.
+    await annaS.page.goto(`/console/events/${eventId}`);
+    await expect(annaS.page.getByRole('tab', { name: 'Photographs' })).toBeVisible();
+    await expect(annaS.page.getByRole('tab', { name: 'Developer' })).toHaveCount(0);
+    expect((await annaS.page.request.get(`/api/admin/events/${eventId}/developer`)).status()).toBe(403);
+
+    await admin.page.goto(`/console/events/${eventId}`);
+    await admin.page.getByRole('tab', { name: 'Developer' }).click();
+    await expect(admin.page.getByText('Available to websites')).toBeVisible();
+    await expect(admin.page.getByText(`/api/v1/events/${eventId}/photos`).first()).toBeVisible();
+    await admin.page.getByRole('tab', { name: 'JavaScript' }).click();
+    await expect(admin.page.getByLabel('Code example')).toContainText('Authorization: `Bearer ${process.env.IU_KEY}`');
+    await admin.page.getByRole('tab', { name: 'Python' }).click();
+    await expect(admin.page.getByLabel('Code example')).toContainText('requests.get');
+
+    await admin.page.getByLabel('Website').selectOption({ label: `Dev Preview Site ${stamp}` });
+    await admin.page.getByLabel('Resource').selectOption({ label: 'Photos' });
+    await admin.page.getByRole('button', { name: 'Run request' }).click();
+    await expect(admin.page.getByLabel('Response body')).toContainText('"thumbnail"');
+    await expect(admin.page.getByLabel('Response body')).toContainText('"total": 4');
+    await expect(admin.page.getByRole('img', { name: /IMG_00\d\.jpg/ }).first()).toBeVisible();
+    // The signed thumbnails in the preview really load.
+    expect(await admin.page.getByRole('img', { name: /IMG_00\d\.jpg/ }).first().evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0)).toBe(true);
+  });
+
   test('extends access and the expiry closes the public gallery, then reactivates', async ({ browser }) => {
     const past = await admin.page.request.patch(`/api/events/${eventId}`, { data: { expiresAt: new Date(Date.now() - 60_000).toISOString() } });
     expect(past.status()).toBe(200);
