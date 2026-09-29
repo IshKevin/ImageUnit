@@ -1,4 +1,4 @@
-name: imageunit
+version: '3.8'
 services:
   postgres:
     image: postgres:18-alpine
