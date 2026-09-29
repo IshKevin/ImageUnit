@@ -1,0 +1,110 @@
+import cookie from '@fastify/cookie';
+import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
+import Fastify from 'fastify';
+import { randomUUID } from 'node:crypto';
+import { ZodError } from 'zod';
+import client from 'prom-client';
+import { sql } from 'drizzle-orm';
+import type { AppContext } from './context.js';
+import './http/types.js';
+import { AppError } from './lib/errors.js';
+import { UsageRecorder } from './lib/usage.js';
+import { adminRoutes } from './modules/admin.js';
+import { authRoutes } from './modules/auth.js';
+import { clientRoutes } from './modules/clients.js';
+import { eventRoutes } from './modules/events.js';
+import { galleryRoutes } from './modules/galleries.js';
+import { photoRoutes } from './modules/photos.js';
+import { publicRoutes } from './modules/public.js';
+import { statsRoutes } from './modules/stats.js';
+import { userRoutes } from './modules/users.js';
+import { websiteApiRoutes } from './modules/website-api.js';
+
+export async function buildApp(ctx: AppContext, opts: { rateLimitMax?: number } = {}) {
+  const app = Fastify({
+    loggerInstance: ctx.log,
+    trustProxy: ctx.config.TRUST_PROXY,
+    genReqId: (req) => (req.headers['x-request-id'] as string | undefined)?.slice(0, 64) ?? randomUUID(),
+    bodyLimit: 1024 * 1024,
+  });
+  app.decorate('ctx', ctx);
+
+  const registry = new client.Registry();
+  client.collectDefaultMetrics({ register: registry });
+  const httpDuration = new client.Histogram({
+    name: 'http_request_duration_seconds',
+    help: 'HTTP request latency',
+    labelNames: ['method', 'route', 'status'],
+    buckets: [0.01, 0.05, 0.1, 0.3, 1, 3],
+    registers: [registry],
+  });
+  app.addHook('onResponse', async (req, reply) => {
+    httpDuration.observe({ method: req.method, route: req.routeOptions?.url ?? 'unmatched', status: reply.statusCode }, reply.elapsedTime / 1000);
+  });
+
+  await app.register(helmet, { contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } });
+  await app.register(cors, { origin: [new URL(ctx.config.PUBLIC_WEB_URL).origin], credentials: true });
+  await app.register(cookie);
+  await app.register(rateLimit, {
+    global: true,
+    max: opts.rateLimitMax ?? 1200,
+    timeWindow: '1 minute',
+    ...(ctx.redis && { redis: ctx.redis }),
+    // Website credentials have their own per-key limits.
+    allowList: (req) => req.url.startsWith('/api/v1/') || req.url.startsWith('/health') || req.url.startsWith('/ready'),
+  });
+
+  app.setErrorHandler((err, req, reply) => {
+    if (err instanceof AppError) {
+      return reply.code(err.statusCode).send({ error: { code: err.code, message: err.message, details: err.details, requestId: req.id } });
+    }
+    if (err instanceof ZodError) {
+      return reply.code(400).send({ error: { code: 'bad_request', message: 'Validation failed', details: err.issues, requestId: req.id } });
+    }
+    const status = (err as { statusCode?: number }).statusCode;
+    if (status && status >= 400 && status < 500) {
+      return reply.code(status).send({ error: { code: status === 429 ? 'rate_limited' : 'bad_request', message: (err as Error).message, requestId: req.id } });
+    }
+    req.log.error({ err }, 'unhandled error');
+    return reply.code(500).send({ error: { code: 'internal', message: 'Something went wrong', requestId: req.id } });
+  });
+  app.setNotFoundHandler((req, reply) => reply.code(404).send({ error: { code: 'not_found', message: 'Not found', requestId: req.id } }));
+
+  // Infrastructure endpoints.
+  app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/ready', async (_req, reply) => {
+    const [db, storage] = await Promise.all([ctx.db.execute(sql`select 1`).then(() => true, () => false), ctx.storage.ping()]);
+    const ok = db && storage;
+    return reply.code(ok ? 200 : 503).send({ status: ok ? 'ready' : 'unavailable', db, storage });
+  });
+  app.get('/metrics', async (req, reply) => {
+    const token = ctx.config.METRICS_TOKEN;
+    if (token && req.headers.authorization !== `Bearer ${token}`) return reply.code(401).send();
+    reply.type(registry.contentType);
+    return registry.metrics();
+  });
+
+  const usage = new UsageRecorder(ctx.db, ctx.log);
+  if (ctx.config.NODE_ENV !== 'test') usage.start();
+  app.addHook('onClose', async () => usage.stop());
+
+  await app.register(
+    async (api) => {
+      await api.register(authRoutes);
+      await api.register(userRoutes);
+      await api.register(eventRoutes);
+      await api.register(galleryRoutes);
+      await api.register(photoRoutes);
+      await api.register(publicRoutes);
+      await api.register(clientRoutes);
+      await api.register(adminRoutes);
+      await api.register(statsRoutes);
+      await api.register(websiteApiRoutes, { usage });
+    },
+    { prefix: '/api' },
+  );
+
+  return Object.assign(app, { usage });
+}

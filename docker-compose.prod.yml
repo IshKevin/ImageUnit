@@ -1,0 +1,23 @@
+# Reference production topology. Postgres, Redis and S3 should be managed services (or hardened separately);
+# supply their connection details through .env.production. Terminate TLS in front of `web` and `api`.
+name: imageunit-prod
+services:
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    env_file: .env.production
+    restart: unless-stopped
+    ports: ["4000:4000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+  worker:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    command: ["node", "dist/worker.js"]
+    env_file: .env.production
+    restart: unless-stopped
+    deploy: { replicas: 2 }   # scale horizontally for large upload bursts
+  web:
+    build: { context: ., dockerfile: apps/web/Dockerfile, args: { API_URL: "http://api:4000" } }
+    restart: unless-stopped
+    ports: ["4001:4001"]
+    depends_on: [api]
