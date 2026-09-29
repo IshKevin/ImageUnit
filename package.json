@@ -9,7 +9,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "infra:up": "docker compose up -d --wait",
+    "infra:up": "docker compose up -d --wait postgres redis s3",
     "infra:down": "docker compose down",
     "dev:api": "npm run dev -w @imageunit/api",
     "dev:worker": "npm run dev:worker -w @imageunit/api",

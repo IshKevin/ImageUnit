@@ -42,6 +42,10 @@ export function createS3Storage(config: Config): Storage {
   const base = {
     region: config.S3_REGION,
     forcePathStyle: config.S3_FORCE_PATH_STYLE,
+    // The SDK's newer default attaches CRC32 checksums to every request, which most S3-compatible servers
+    // (SeaweedFS, Garage, ...) reject with BadDigest. Only compute checksums when the operation requires one.
+    requestChecksumCalculation: 'WHEN_REQUIRED' as const,
+    responseChecksumValidation: 'WHEN_REQUIRED' as const,
     credentials: { accessKeyId: config.S3_ACCESS_KEY, secretAccessKey: config.S3_SECRET_KEY },
   };
   const internal = new S3Client({ ...base, endpoint: config.S3_ENDPOINT });

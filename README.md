@@ -2,7 +2,7 @@
 
 Centralised platform for event photographers, attendees, and the company's websites. See [Project.md](Project.md) for the full specification.
 
-**Stack:** Node 24 · TypeScript 7 · Fastify 5 · PostgreSQL 18 (Drizzle) · Redis 8 + BullMQ · S3-compatible storage (MinIO) · sharp · Next.js 16 (React 19, Tailwind 4) · Vitest 5 · Playwright.
+**Stack:** Node 24 · TypeScript 7 · Fastify 5 · PostgreSQL 18 (Drizzle) · Redis 8 + BullMQ · S3-compatible storage (SeaweedFS) · sharp · Next.js 16 (React 19, Tailwind 4) · Vitest 5 · Playwright.
 
 ```
 apps/api   REST API + background worker (server.ts / worker.ts)
@@ -11,16 +11,23 @@ ops/       backup + verified-restore scripts
 docs/      runbook, data-protection checklist, website API
 ```
 
-## Local development
+## Run everything (one command)
 ```bash
 cp .env.example .env
+docker compose up -d --build --wait      # or: make up
+```
+That single compose file runs the web app (http://localhost:4001), API (:4000), background worker, Postgres 18, Redis 8 and SeaweedFS S3 storage (:8333). Sign in with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` from `.env`. Requires Docker Compose **v2** (`docker compose`, with a space).
+
+Everyday commands: `make logs`, `make ps`, `make down`, `make reset` (wipes local data). Scale image processing with `docker compose up -d --scale worker=3`.
+
+### Developing with hot reload
+```bash
+make dev                  # starts only Postgres, Redis and S3
 npm install
-npm run infra:up          # = `docker compose up -d --wait` (Compose v2 only; the file is `compose.yaml`). Postgres :5440, Redis :6390, MinIO :9100 (console :9101)
-npm run dev:api           # http://localhost:4000  (applies migrations, creates bootstrap admin)
-npm run dev:worker        # image processing + maintenance
+npm run dev:api           # http://localhost:4000  (stop the containerised api/web first: docker compose stop api worker web)
+npm run dev:worker
 npm run dev:web           # http://localhost:4001
 ```
-Sign in at http://localhost:4001 with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` from `.env`.
 
 ## Tests
 `npm run test:e2e` drives a real Chromium browser through every role's workflow (30 scenarios: administrator, photographer, mobile attendee, private gallery, website client, and the security boundaries between them). It needs the whole stack running (infra, API, worker, `next start`) and the admin credentials from `.env`.

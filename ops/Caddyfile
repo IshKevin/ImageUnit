@@ -14,7 +14,7 @@ api.{$DOMAIN} {
 
 # Presigned uploads/downloads. Host header is preserved so S3 signatures stay valid.
 media.{$DOMAIN} {
-	reverse_proxy minio:9000 {
+	reverse_proxy s3:8333 {
 		header_up Host {host}
 	}
 }

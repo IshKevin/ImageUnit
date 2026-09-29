@@ -4,7 +4,8 @@
 # Production: set PG_URL / S3_* and run from cron or your scheduler; ship $BACKUP_DIR off-site.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-[ -f .env ] && set -a && . ./.env && set +a
+ENV_FILE="${ENV_FILE:-.env}"
+[ -f "$ENV_FILE" ] && set -a && . "./$ENV_FILE" && set +a
 
 BACKUP_DIR="${1:-./backups}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -19,11 +20,13 @@ else
 fi
 
 echo "==> Media mirror ($S3_BUCKET)"
-NETWORK_ARGS=()
-[ -z "${PG_URL:-}" ] && NETWORK_ARGS=(--network host)
-docker run --rm "${NETWORK_ARGS[@]}" -v "$(cd "$TARGET/media" && pwd):/backup" \
-  -e MC_HOST_src="$(echo "${S3_ENDPOINT}" | sed -E "s#^(https?)://#\1://${S3_ACCESS_KEY}:${S3_SECRET_KEY}@#")" \
-  --entrypoint /bin/sh minio/mc -c "mc mirror --overwrite --quiet src/${S3_BUCKET} /backup"
+# rclone (maintained, storage-agnostic) talks S3 to whatever backs the platform. --network host reaches the
+# published S3 port on this machine; set S3_BACKUP_ENDPOINT if the storage lives elsewhere.
+docker run --rm --network host -v "$(cd "$TARGET/media" && pwd):/backup" \
+  -e RCLONE_CONFIG_SRC_TYPE=s3 -e RCLONE_CONFIG_SRC_PROVIDER=Other \
+  -e RCLONE_CONFIG_SRC_ACCESS_KEY_ID="$S3_ACCESS_KEY" -e RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY="$S3_SECRET_KEY" \
+  -e RCLONE_CONFIG_SRC_ENDPOINT="${S3_BACKUP_ENDPOINT:-http://127.0.0.1:8333}" -e RCLONE_CONFIG_SRC_FORCE_PATH_STYLE=true \
+  rclone/rclone sync "src:${S3_BUCKET}" /backup --checksum --stats-one-line
 
 # Manifest lets restore-test.sh verify the backup without trusting it blindly.
 DB_ROWS_PHOTOS="$(docker compose exec -T postgres psql -U imageunit -Atc 'select count(*) from photos' imageunit 2>/dev/null || echo unknown)"

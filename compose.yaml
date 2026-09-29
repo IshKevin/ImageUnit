@@ -1,38 +1,116 @@
-# Requires Docker Compose v2: use `docker compose ...` or `make up`. The legacy `docker-compose` v1 rejects this file on purpose
-# (it crashes and destroys containers on current Docker versions).
+# ImageUnit — one compose file for everything.
+#
+#   docker compose up -d --build            # web + API + worker + Postgres + Redis + S3 storage, on localhost
+#   docker compose --profile https up -d    # ...plus Caddy with automatic HTTPS (production, see docs/RUNBOOK.md)
+#
+# Requires Docker Compose v2 (`docker compose`). The legacy Python `docker-compose` v1 rejects this file on purpose:
+# it crashes and destroys containers on current Docker versions.
+#
+# Configuration comes from .env (local) or .env.production (`ENV_FILE=.env.production`, see `make prod-up`).
 name: imageunit
+
+x-app: &app
+  env_file: ${ENV_FILE:-.env}
+  restart: unless-stopped
+  init: true
+  environment: &app-env
+    # Inside the compose network the services are reached by name, whatever .env says for host-side development.
+    NODE_ENV: ${NODE_ENV:-development}
+    DATABASE_URL: postgres://imageunit:${POSTGRES_PASSWORD:-imageunit}@postgres:5432/imageunit
+    REDIS_URL: redis://:${REDIS_PASSWORD:-imageunit}@redis:6379
+    S3_ENDPOINT: http://s3:8333
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY:-imageunit}
+    S3_SECRET_KEY: ${S3_SECRET_KEY:-imageunit-secret}
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+    s3: { condition: service_healthy }
+
 services:
+  # ---------- application ----------
+  api:
+    <<: *app
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    ports: ["${BIND_ADDR:-127.0.0.1}:4000:4000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  worker:
+    <<: *app
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    command: ["node", "dist/worker.js"]
+    # Scale for big upload bursts: docker compose up -d --scale worker=3
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args: { API_URL: "http://api:4000" }
+    restart: unless-stopped
+    init: true
+    ports: ["${BIND_ADDR:-127.0.0.1}:4001:4001"]
+    depends_on: { api: { condition: service_healthy } }
+
+  # ---------- infrastructure ----------
   postgres:
     image: postgres:18-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: imageunit
-      POSTGRES_PASSWORD: imageunit
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-imageunit}
       POSTGRES_DB: imageunit
-    ports: ["5440:5432"]
+    ports: ["${BIND_ADDR:-127.0.0.1}:5440:5432"]
     volumes: [pgdata:/var/lib/postgresql]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U imageunit"]
-      interval: 5s
-      retries: 10
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U imageunit"], interval: 5s, retries: 12 }
+
   redis:
     image: redis:8-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    ports: ["6390:6379"]
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-imageunit}"]
+    ports: ["${BIND_ADDR:-127.0.0.1}:6390:6379"]
     volumes: [redisdata:/data]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      retries: 10
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
+    healthcheck: { test: ["CMD-SHELL", "redis-cli -a \"${REDIS_PASSWORD:-imageunit}\" --no-auth-warning ping | grep -q PONG"], interval: 5s, retries: 12 }
+
+  # S3-compatible object storage (SeaweedFS: Apache-2.0, actively maintained; replaces the archived MinIO).
+  # Browsers upload/download directly through presigned URLs, so this must be reachable at S3_PUBLIC_ENDPOINT.
+  s3:
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: imageunit
-      MINIO_ROOT_PASSWORD: imageunit-secret
-    ports: ["9100:9000", "9101:9001"]
-    volumes: [miniodata:/data]
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      retries: 10
-volumes: { pgdata: {}, redisdata: {}, miniodata: {} }
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-imageunit}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-imageunit-secret}
+    command:
+      - server
+      - -dir=/data
+      - -ip=s3
+      - -ip.bind=0.0.0.0
+      - -s3
+      - -s3.port=8333
+      # Browser CORS is limited to our web app.
+      - -s3.allowedOrigins=${PUBLIC_WEB_URL:-http://localhost:4001}
+      - -master.volumeSizeLimitMB=1024
+    ports: ["${BIND_ADDR:-127.0.0.1}:8333:8333"]
+    volumes: [s3data:/data]
+    # Any HTTP answer (even 403 for an unsigned request) means the S3 gateway is listening.
+    healthcheck: { test: ["CMD-SHELL", "wget -q -S --spider http://localhost:8333/ 2>&1 | grep -q 'HTTP/'"], interval: 5s, timeout: 5s, retries: 20, start_period: 10s }
+
+  # ---------- HTTPS reverse proxy (production only: --profile https) ----------
+  caddy:
+    profiles: [https]
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment: { DOMAIN: "${DOMAIN:-localhost}" }
+    volumes: [./ops/Caddyfile:/etc/caddy/Caddyfile:ro, caddy_data:/data, caddy_config:/config]
+    depends_on: [web, api, s3]
+
+volumes:
+  pgdata: {}
+  redisdata: {}
+  s3data: {}
+  caddy_data: {}
+  caddy_config: {}

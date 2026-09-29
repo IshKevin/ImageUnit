@@ -8,7 +8,7 @@
 | `web` | Next.js console and public gallery pages | stateless |
 | Postgres | System of record (users, events, audit log) | managed, PITR enabled |
 | Redis | Job queue + rate-limit counters | managed; loss is recoverable (see below) |
-| S3-compatible bucket | Originals, previews, thumbnails | versioning + cross-region replication |
+| S3-compatible bucket (SeaweedFS by default; AWS S3, R2, Garage, ... also work) | Originals, previews, thumbnails | replication/erasure coding + regular `ops/backup.sh` |
 
 Run migrations before rolling a new release: `npm run db:migrate` (the API also applies pending migrations at boot — disable that in multi-replica deployments by running migrations as a release step).
 
@@ -19,14 +19,15 @@ Needs a Linux server with Docker Compose v2, ports 80/443 open, and three DNS re
 
 ```bash
 make prod-env DOMAIN=company.com ADMIN=you@company.com   # writes .env.production with random secrets (mode 600, git-ignored)
-make prod-up                                              # builds images, starts Postgres, Redis, MinIO, API, worker, web, Caddy (auto HTTPS)
+make prod-up                                              # the same compose.yaml plus Caddy (auto HTTPS): web, API, worker, Postgres, Redis, SeaweedFS
 make prod-ps
 ```
 1. Sign in at `https://photos.<domain>` with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` from `.env.production`, change the password, then delete those two lines from the file and run `make prod-up` again.
 2. **Back up `.env.production`** in a password manager. Losing `SESSION_SECRET` signs everyone out and breaks every website's signed image links; the DB/MinIO passwords are needed to restore.
 3. Schedule `ops/backup.sh` (daily) and `ops/restore-test.sh` (weekly), and copy `./backups` off the server.
 4. `api.<domain>` only forwards `/api/v1/*` to the internet (admin/auth routes are blocked at the proxy); `/metrics` also requires `METRICS_TOKEN`.
-5. Managed Postgres/Redis/S3 instead: edit the URLs in `.env.production`, drop `--profile selfhosted` from the `PROD` command in the Makefile, and put your own TLS proxy in front.
+5. Managed Postgres/Redis/S3 instead: override `DATABASE_URL`, `REDIS_URL`, `S3_ENDPOINT` (and the S3 keys) for the `api` and `worker` services in a `compose.override.yaml`, start only `api worker web`, and put your own TLS proxy in front. The object storage is only ever accessed through the S3 API, so any S3-compatible service works.
+6. Object storage note: MinIO was archived upstream in April 2026 and is no longer used. Browser CORS on the storage gateway is limited to `PUBLIC_WEB_URL` (`-s3.allowedOrigins`).
 
 ## Deploy checklist
 1. Set every variable in `.env.example`; in production `COOKIE_SECURE=true`, `TRUST_PROXY=true` behind a reverse proxy, a 64-char random `SESSION_SECRET`, and a `METRICS_TOKEN`.
@@ -38,8 +39,9 @@ make prod-ps
 
 ## Backup and recovery
 * `ops/backup.sh` — Postgres dump (custom format) + full media mirror + manifest + checksum. Schedule at least daily; ship off-site.
+* `ops/restore-media.sh <backup>` — copies the media of a backup back into the bucket (also the way to migrate between storage systems).
 * `ops/restore-test.sh <backup>` — restores into a scratch database, verifies admins exist and that **every original referenced in the database exists in the media backup**. Run it on a schedule (weekly) and after every change to backup tooling. Record the result.
-* Production databases should additionally use managed point-in-time recovery; the bucket should have versioning so an accidental overwrite/delete is recoverable independently of application logic.
+* Production databases should additionally use managed point-in-time recovery; if your object storage supports versioning enable it; otherwise the daily `ops/backup.sh` media mirror is what makes an accidental delete recoverable independently of application logic.
 
 | Scenario | Recovery |
 |---|---|
