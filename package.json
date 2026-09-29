@@ -2,8 +2,12 @@
   "name": "imageunit",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["apps/*"],
-  "engines": { "node": ">=22" },
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "infra:up": "docker-compose up -d",
     "infra:down": "docker compose down",
@@ -13,6 +17,7 @@
     "db:migrate": "npm run db:migrate -w @imageunit/api",
     "db:seed": "npm run db:seed -w @imageunit/api",
     "test": "npm run test -w @imageunit/api",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:e2e": "npm run test -w @imageunit/e2e"
   }
 }

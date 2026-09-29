@@ -5,14 +5,14 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env: { POSTGRES_USER: imageunit, POSTGRES_PASSWORD: imageunit, POSTGRES_DB: imageunit }
         ports: ["5440:5432"]
         options: --health-cmd "pg_isready -U imageunit" --health-interval 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
+        with: { node-version: 24, cache: npm }
       - run: npm ci
       - run: npm run typecheck
       - run: npm test

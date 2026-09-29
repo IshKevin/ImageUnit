@@ -1,0 +1,1 @@
+{"name":"@imageunit/e2e","private":true,"version":"0.1.0","type":"module","scripts":{"test":"playwright test"},"devDependencies":{"@playwright/test":"^1.63.0","sharp":"^0.35.5"}}

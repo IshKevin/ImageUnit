@@ -28,6 +28,24 @@ interface Activity {
   entityType: string | null;
 }
 
+const PERMISSION_NAMES: Record<string, string> = {
+  'events:view': 'View events',
+  'events:create': 'Create events',
+  'events:edit': 'Edit events',
+  'events:publish': 'Publish events',
+  'images:upload': 'Upload images',
+  'galleries:manage': 'Manage galleries',
+  'stats:view': 'View statistics',
+  'images:download': 'Download originals',
+  'users:manage': 'Manage users',
+  'websites:manage': 'Manage websites',
+  'api:manage': 'Manage API access',
+  'images:delete': 'Delete images',
+  'events:delete': 'Delete and archive events',
+  'settings:manage': 'Manage system settings',
+  'audit:view': 'View audit logs',
+};
+
 export default function UserDetailPage() {
   return (
     <AdminGate perm="users:manage">
@@ -178,7 +196,8 @@ function UserDetail() {
                 {GRANTABLE.map((p) => (
                   <label key={p} className="flex items-center gap-2 text-sm">
                     <input type="checkbox" className="size-4 accent-[var(--accent)]" checked={perms.includes(p)} onChange={(e) => setPerms(e.target.checked ? [...perms, p] : perms.filter((x) => x !== p))} />
-                    <span className="font-mono text-xs">{p}</span>
+                    <span>{PERMISSION_NAMES[p] ?? p}</span>
+                    <span className="font-mono text-xs text-muted">{p}</span>
                     {DEFAULTS.includes(p) && <span className="text-xs text-muted">(default)</span>}
                   </label>
                 ))}
@@ -190,7 +209,7 @@ function UserDetail() {
                 {ADMIN_ONLY.map((p) => (
                   <label key={p} className="flex items-center gap-2 text-sm text-muted">
                     <input type="checkbox" disabled checked={false} className="size-4" />
-                    <span className="font-mono text-xs">{p}</span>
+                    <span>{PERMISSION_NAMES[p] ?? p}</span>
                     <span className="inline-flex items-center gap-1 text-xs"><Lock className="size-3" aria-hidden /> Administrator only</span>
                   </label>
                 ))}

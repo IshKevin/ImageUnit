@@ -2,7 +2,7 @@
 
 Centralised platform for event photographers, attendees, and the company's websites. See [Project.md](Project.md) for the full specification.
 
-**Stack:** TypeScript · Fastify 5 · PostgreSQL (Drizzle) · Redis + BullMQ · S3-compatible storage · sharp · Next.js 16 (React 19, Tailwind 4).
+**Stack:** Node 24 · TypeScript 7 · Fastify 5 · PostgreSQL 18 (Drizzle) · Redis 8 + BullMQ · S3-compatible storage (MinIO) · sharp · Next.js 16 (React 19, Tailwind 4) · Vitest 5 · Playwright.
 
 ```
 apps/api   REST API + background worker (server.ts / worker.ts)
@@ -23,6 +23,8 @@ npm run dev:web           # http://localhost:4001
 Sign in at http://localhost:4001 with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` from `.env`.
 
 ## Tests
+`npm run test:e2e` drives a real Chromium browser through every role's workflow (30 scenarios: administrator, photographer, mobile attendee, private gallery, website client, and the security boundaries between them). It needs the whole stack running (infra, API, worker, `next start`) and the admin credentials from `.env`.
+
 `npm test` runs the API integration suite against a real Postgres (`imageunit_test`, created automatically) with an in-memory storage double. It covers the Definition-of-Done security and reliability scenarios: cross-photographer isolation, admin-only deletion, suspension, website revocation, private galleries, expiry-without-data-loss, failed-upload retry, audit immutability.
 
 ## Architecture in one paragraph

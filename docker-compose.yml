@@ -1,19 +1,19 @@
 version: '3.8'
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: imageunit
       POSTGRES_PASSWORD: imageunit
       POSTGRES_DB: imageunit
     ports: ["5440:5432"]
-    volumes: [pgdata:/var/lib/postgresql/data]
+    volumes: [pgdata:/var/lib/postgresql]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U imageunit"]
       interval: 5s
       retries: 10
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports: ["6390:6379"]
     volumes: [redisdata:/data]

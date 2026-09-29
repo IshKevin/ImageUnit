@@ -2,7 +2,7 @@
 
 import clsx from 'clsx';
 import { Loader2, X } from 'lucide-react';
-import { useEffect, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { useEffect, useId, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
@@ -121,6 +121,7 @@ export function ErrorNote({ error }: { error: unknown }) {
 
 export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const d = ref.current;
     if (!d) return;
@@ -130,6 +131,7 @@ export function Modal({ open, onClose, title, children, wide }: { open: boolean;
   return (
     <dialog
       ref={ref}
+      aria-labelledby={titleId}
       onClose={onClose}
       onClick={(e) => e.target === ref.current && onClose()}
       className={clsx('m-auto w-[calc(100%-2rem)] rounded-xl border border-border bg-surface p-0 text-fg backdrop:bg-black/50', wide ? 'max-w-2xl' : 'max-w-md')}
@@ -137,7 +139,7 @@ export function Modal({ open, onClose, title, children, wide }: { open: boolean;
       {open && (
         <div>
           <div className="flex items-center justify-between border-b border-border px-5 py-3">
-            <h2 className="font-semibold">{title}</h2>
+            <h2 id={titleId} className="font-semibold">{title}</h2>
             <button onClick={onClose} aria-label="Close" className="rounded p-1 hover:bg-surface-2">
               <X className="size-4" />
             </button>

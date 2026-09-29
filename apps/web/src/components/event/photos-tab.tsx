@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { AlertTriangle, Check, EyeOff, RotateCcw, Trash2 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { UploadPanel } from '../upload-panel';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorNote, Loading, Modal, Pagination, Select, Spinner, statusTone } from '../ui';
@@ -32,6 +32,12 @@ export function PhotosTab({ event }: { event: EventItem }) {
     refetchInterval: (q) => (q.state.data && q.state.data.uploaded + q.state.data.processing > 0 ? 3000 : false),
   });
   const active = (summary.data?.uploaded ?? 0) + (summary.data?.processing ?? 0) > 0;
+  // When processing finishes the summary stops polling; refresh the grid once more so it never shows stale placeholders.
+  const wasActive = useRef(false);
+  useEffect(() => {
+    if (wasActive.current && !active) void qc.invalidateQueries({ queryKey: ['photos', eid] });
+    wasActive.current = active;
+  }, [active, eid, qc]);
   const photos = useQuery({
     queryKey: ['photos', eid, galleryId, status, page],
     queryFn: () => get<Paged<Photo>>(`/events/${eid}/photos${qs({ galleryId, status, page, pageSize: 60 })}`),
