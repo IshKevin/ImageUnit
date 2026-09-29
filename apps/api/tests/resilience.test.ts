@@ -18,3 +18,21 @@ describe('resilience', () => {
     await pool.end();
   });
 });
+
+describe('configuration', () => {
+  const base = { DATABASE_URL: 'postgres://x', REDIS_URL: 'redis://x', S3_BUCKET: 'b', S3_ACCESS_KEY: 'a', S3_SECRET_KEY: 's', SESSION_SECRET: 'x'.repeat(40) } as NodeJS.ProcessEnv;
+
+  it('treats empty optional variables (as injected by compose/Coolify) as unset', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const c = loadConfig({ ...base, BOOTSTRAP_ADMIN_EMAIL: '', BOOTSTRAP_ADMIN_PASSWORD: '', METRICS_TOKEN: '', S3_ENDPOINT: '' });
+    expect(c.BOOTSTRAP_ADMIN_EMAIL).toBeUndefined();
+    expect(c.METRICS_TOKEN).toBeUndefined();
+  });
+
+  it('refuses insecure production settings', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    expect(() => loadConfig({ ...base, NODE_ENV: 'production', COOKIE_SECURE: 'false' })).toThrow(/COOKIE_SECURE/);
+    expect(() => loadConfig({ ...base, NODE_ENV: 'production', COOKIE_SECURE: 'true', SESSION_SECRET: 'change-me-to-64-random-hex-chars-change-me-to-64' })).toThrow(/placeholder/);
+    expect(loadConfig({ ...base, NODE_ENV: 'production', COOKIE_SECURE: 'true' }).NODE_ENV).toBe('production');
+  });
+});

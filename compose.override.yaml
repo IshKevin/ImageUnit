@@ -1,0 +1,8 @@
+# Loaded automatically by `docker compose` (not by platforms that name compose.yaml explicitly, e.g. Coolify).
+# Publishes service ports on this machine only. Set BIND_ADDR=0.0.0.0 to expose them on the network.
+services:
+  api:      { ports: ["${BIND_ADDR:-127.0.0.1}:4000:4000"] }
+  web:      { ports: ["${BIND_ADDR:-127.0.0.1}:4001:4001"] }
+  postgres: { ports: ["${BIND_ADDR:-127.0.0.1}:5440:5432"] }
+  redis:    { ports: ["${BIND_ADDR:-127.0.0.1}:6390:6379"] }
+  s3:       { ports: ["${BIND_ADDR:-127.0.0.1}:8333:8333"] }

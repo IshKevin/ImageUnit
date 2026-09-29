@@ -11,7 +11,7 @@ dev:    infra ; @echo "Now run: npm run dev:api / dev:worker / dev:web"
 reset:  ; $(COMPOSE) down -v                    # DESTROYS local data (database, media, queue)
 
 # ---- production (one server, HTTPS via Caddy; see docs/RUNBOOK.md) ----
-PROD := ENV_FILE=.env.production $(COMPOSE) --env-file .env.production --profile https
+PROD := $(COMPOSE) --env-file .env.production --profile https
 .PHONY: prod-env prod-up prod-down prod-logs prod-ps
 prod-env:  ; @test -n "$(DOMAIN)" || (echo "usage: make prod-env DOMAIN=company.com [ADMIN=you@company.com]"; exit 1); ./ops/gen-env.sh $(DOMAIN) $(ADMIN)
 prod-up:   ; $(PROD) up -d --build --wait

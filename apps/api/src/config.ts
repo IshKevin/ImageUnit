@@ -33,14 +33,17 @@ const schema = z.object({
 
 export type Config = z.infer<typeof schema>;
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+export function loadConfig(input: NodeJS.ProcessEnv = process.env): Config {
+  // Platforms (Docker Compose interpolation, Coolify, ...) pass unset optional variables as empty strings.
+  const env = Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined && v !== ''));
   const parsed = schema.safeParse(env);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
-  if (parsed.data.NODE_ENV === 'production' && !parsed.data.COOKIE_SECURE) {
-    throw new Error('COOKIE_SECURE must be true in production');
+  if (parsed.data.NODE_ENV === 'production') {
+    if (!parsed.data.COOKIE_SECURE) throw new Error('COOKIE_SECURE must be true in production');
+    if (/change-?me/i.test(parsed.data.SESSION_SECRET)) throw new Error('SESSION_SECRET is still the placeholder value; generate a real one (openssl rand -hex 32)');
   }
   return parsed.data;
 }
