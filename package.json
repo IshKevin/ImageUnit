@@ -1,0 +1,18 @@
+{
+  "name": "imageunit",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/*"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "infra:up": "docker compose up -d --wait",
+    "infra:down": "docker compose down",
+    "dev:api": "npm run dev -w @imageunit/api",
+    "dev:worker": "npm run dev:worker -w @imageunit/api",
+    "dev:web": "npm run dev -w @imageunit/web",
+    "db:migrate": "npm run db:migrate -w @imageunit/api",
+    "db:seed": "npm run db:seed -w @imageunit/api",
+    "test": "npm run test -w @imageunit/api",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}
