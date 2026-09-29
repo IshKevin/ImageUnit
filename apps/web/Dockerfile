@@ -11,7 +11,8 @@ ENV API_URL=$API_URL NEXT_TELEMETRY_DISABLED=1
 RUN npm run build -w @imageunit/web
 
 FROM node:24-bookworm-slim
-ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=4001 HOSTNAME=0.0.0.0
+ARG API_URL=http://api:4000
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=4001 HOSTNAME=0.0.0.0 API_URL=$API_URL
 WORKDIR /repo
 COPY --from=build /repo/apps/web/.next/standalone ./
 COPY --from=build /repo/apps/web/.next/static apps/web/.next/static

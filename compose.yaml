@@ -50,6 +50,8 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args: { API_URL: "http://api:4000" }
+    # Server-rendered pages (public galleries) call the API at runtime, not just the build-time proxy rules.
+    environment: { API_URL: "http://api:4000" }
     restart: unless-stopped
     init: true
     ports: ["${BIND_ADDR:-127.0.0.1}:4001:4001"]

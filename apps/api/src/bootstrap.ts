@@ -6,11 +6,22 @@ import { createQueues, createRedis } from './lib/queue.js';
 import { retry } from './lib/retry.js';
 import { createS3Storage } from './lib/storage.js';
 
+/** Human-readable logs only for an interactive dev terminal where the (dev-only) pino-pretty package is installed. */
+function canPrettyPrint(config: Config) {
+  if (config.NODE_ENV !== 'development' || !process.stdout.isTTY) return false;
+  try {
+    import.meta.resolve('pino-pretty');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function createLogger(config: Config) {
   return pino({
     level: config.LOG_LEVEL,
     redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'],
-    ...(config.NODE_ENV === 'development' && { transport: { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss' } } }),
+    ...(canPrettyPrint(config) && { transport: { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss' } } }),
   });
 }
 
