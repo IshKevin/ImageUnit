@@ -14,7 +14,7 @@ Run migrations before rolling a new release: `npm run db:migrate` (the API also 
 
 ## Deploying to a single server (self-hosted)
 
-Needs a Linux server with Docker Compose v2, ports 80/443 open, and three DNS records pointing at it:
+(On Coolify see [COOLIFY.md](COOLIFY.md).) Needs a Linux server with Docker Compose v2, ports 80/443 open, and three DNS records pointing at it:
 `photos.<domain>` (web), `api.<domain>` (company websites), `media.<domain>` (browser uploads/downloads).
 
 ```bash
