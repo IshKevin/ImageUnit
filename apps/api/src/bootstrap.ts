@@ -3,6 +3,7 @@ import { loadConfig, type Config } from './config.js';
 import type { AppContext } from './context.js';
 import { createDb } from './db/client.js';
 import { createQueues, createRedis } from './lib/queue.js';
+import { retry } from './lib/retry.js';
 import { createS3Storage } from './lib/storage.js';
 
 export function createLogger(config: Config) {
@@ -20,7 +21,7 @@ export async function createContext() {
   const redis = createRedis(config.REDIS_URL);
   redis.on('error', (err) => log.error({ err: err.message }, 'redis error'));
   const storage = createS3Storage(config);
-  await storage.ensureReady();
+  await retry('object storage', () => storage.ensureReady(), { log: (m) => log.warn(m) });
   const ctx: AppContext = { config, db, storage, redis, queues: createQueues(redis), log };
   return { ctx, pool, redis };
 }

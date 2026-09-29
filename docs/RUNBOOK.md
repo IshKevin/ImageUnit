@@ -12,6 +12,22 @@
 
 Run migrations before rolling a new release: `npm run db:migrate` (the API also applies pending migrations at boot — disable that in multi-replica deployments by running migrations as a release step).
 
+## Deploying to a single server (self-hosted)
+
+Needs a Linux server with Docker Compose v2, ports 80/443 open, and three DNS records pointing at it:
+`photos.<domain>` (web), `api.<domain>` (company websites), `media.<domain>` (browser uploads/downloads).
+
+```bash
+make prod-env DOMAIN=company.com ADMIN=you@company.com   # writes .env.production with random secrets (mode 600, git-ignored)
+make prod-up                                              # builds images, starts Postgres, Redis, MinIO, API, worker, web, Caddy (auto HTTPS)
+make prod-ps
+```
+1. Sign in at `https://photos.<domain>` with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` from `.env.production`, change the password, then delete those two lines from the file and run `make prod-up` again.
+2. **Back up `.env.production`** in a password manager. Losing `SESSION_SECRET` signs everyone out and breaks every website's signed image links; the DB/MinIO passwords are needed to restore.
+3. Schedule `ops/backup.sh` (daily) and `ops/restore-test.sh` (weekly), and copy `./backups` off the server.
+4. `api.<domain>` only forwards `/api/v1/*` to the internet (admin/auth routes are blocked at the proxy); `/metrics` also requires `METRICS_TOKEN`.
+5. Managed Postgres/Redis/S3 instead: edit the URLs in `.env.production`, drop `--profile selfhosted` from the `PROD` command in the Makefile, and put your own TLS proxy in front.
+
 ## Deploy checklist
 1. Set every variable in `.env.example`; in production `COOKIE_SECURE=true`, `TRUST_PROXY=true` behind a reverse proxy, a 64-char random `SESSION_SECRET`, and a `METRICS_TOKEN`.
 2. **Bucket CORS** must allow `PUT` from the web origin with the `Content-Type` header (browsers upload directly to storage).

@@ -2,9 +2,10 @@ import { buildApp } from './app.js';
 import { createContext } from './bootstrap.js';
 import { ensureBootstrapAdmin } from './db/seed.js';
 import { runMigrations } from './db/migrate.js';
+import { retry } from './lib/retry.js';
 
 const { ctx, pool, redis } = await createContext();
-await runMigrations(ctx.config.DATABASE_URL);
+await retry('database', () => runMigrations(ctx.config.DATABASE_URL), { log: (m) => ctx.log.warn(m) });
 await ensureBootstrapAdmin(ctx);
 
 const app = await buildApp(ctx);

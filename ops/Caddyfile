@@ -1,0 +1,20 @@
+# Automatic HTTPS (Let's Encrypt) for the three public hostnames.
+photos.{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:4001
+}
+
+api.{$DOMAIN} {
+	encode zstd gzip
+	# The console talks to the API through the web app; this host serves company websites (/api/v1/*).
+	@blocked path /api/admin/* /api/auth/* /api/events* /api/photos* /api/galleries* /api/notifications* /api/stats* /metrics
+	respond @blocked 404
+	reverse_proxy api:4000
+}
+
+# Presigned uploads/downloads. Host header is preserved so S3 signatures stay valid.
+media.{$DOMAIN} {
+	reverse_proxy minio:9000 {
+		header_up Host {host}
+	}
+}
