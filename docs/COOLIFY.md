@@ -42,3 +42,28 @@ Three DNS records must point at your Coolify server, then set one domain per ser
 * **Build-time variables.** Coolify passes variables as Docker build args. Uncheck "Available at Buildtime" for secrets where possible. Setting `NODE_ENV=development` no longer breaks the web build (the Dockerfile forces production mode for `next build`).
 * **Persistence.** Data lives in the named volumes `pgdata`, `redisdata`, `s3data`. Back up with Coolify's scheduled backups for Postgres and a periodic copy of the storage volume, or run `ops/backup.sh` on the server (it needs the storage port published; on Coolify use `docker exec`/volume snapshots instead).
 * **Scaling image processing:** raise replicas of `worker` in Coolify or set `WORKER_CONCURRENCY`.
+
+## Health checks
+
+| Where | URL / command | Meaning |
+|---|---|---|
+| API liveness | `GET /health` (also `/api/health`) | process is up |
+| API readiness | `GET /ready` (also `/api/ready`) | database **and** object storage reachable; 503 otherwise |
+| Web | `GET /healthz` | web server is up (`/api/health` and `/api/ready` also work through the web domain) |
+| Worker | `:4002/health` inside the container | 200 only while Redis and Postgres are reachable |
+
+Every service in `compose.yaml` has a container health check built from the above (plus `pg_isready`, `redis-cli ping`, and an S3 gateway probe), so Coolify shows real status and the proxy only routes to healthy containers. Uptime monitors can watch `https://photos.example.com/api/ready` and `https://api.example.com/ready`.
+
+## Troubleshooting: "404 page not found" on a domain
+
+That exact plain-text message comes from Coolify's proxy (Traefik) and means **no route matches the hostname**: the request never reached ImageUnit. Check in this order:
+
+1. **Domain saved on the right service, with the port.** Resource → *Domains for web*: `https://photos.example.com:4001` (the `:4001` is the container port, not something users type). Same for `api` (`:4000`) and `s3` (`:8333`).
+2. **Redeploy after changing domains.** Coolify writes the proxy labels into the compose file at deploy time; changing a domain only takes effect on the next deploy.
+3. **Container healthy.** The proxy drops containers that are not healthy. Resource page: `web`, `api`, `s3` must show *healthy*. If not, open their logs (a crash on startup is nearly always a missing/placeholder `SESSION_SECRET` or `COOKIE_SECURE` not `true` for `api`).
+4. **Proxy is running and on the same network.** Servers → Proxy must be *Running*. If the web container is on an isolated network, enable *Connect to Predefined Network* in the resource's Advanced settings, then redeploy.
+5. **Labels really exist.** On the server:
+   `docker ps --filter name=web --format '{{.Names}}'` then
+   `docker inspect <name> --format '{{json .Config.Labels}}' | tr ',' '\n' | grep -i traefik`
+   You should see a router rule containing `Host(`photos.example.com`)`. If none, step 1–2 did not take effect.
+6. **DNS points at this server** (`dig +short photos.example.com`). A wrong IP usually shows another app's 404 page.

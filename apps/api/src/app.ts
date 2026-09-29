@@ -54,7 +54,7 @@ export async function buildApp(ctx: AppContext, opts: { rateLimitMax?: number } 
     timeWindow: '1 minute',
     ...(ctx.redis && { redis: ctx.redis }),
     // Website credentials have their own per-key limits.
-    allowList: (req) => req.url.startsWith('/api/v1/') || req.url.startsWith('/health') || req.url.startsWith('/ready'),
+    allowList: (req) => req.url.startsWith('/api/v1/') || ['/health', '/ready', '/api/health', '/api/ready'].some((p) => req.url.startsWith(p)),
   });
 
   app.setErrorHandler((err, req, reply) => {
@@ -73,13 +73,19 @@ export async function buildApp(ctx: AppContext, opts: { rateLimitMax?: number } 
   });
   app.setNotFoundHandler((req, reply) => reply.code(404).send({ error: { code: 'not_found', message: 'Not found', requestId: req.id } }));
 
-  // Infrastructure endpoints.
-  app.get('/health', async () => ({ status: 'ok' }));
-  app.get('/ready', async (_req, reply) => {
+  // Health endpoints. `/health` = liveness (process is up); `/ready` = readiness (database + storage reachable).
+  // Both are also served under /api so uptime monitors can use the public web or API domain.
+  const readiness = async () => {
     const [db, storage] = await Promise.all([ctx.db.execute(sql`select 1`).then(() => true, () => false), ctx.storage.ping()]);
-    const ok = db && storage;
-    return reply.code(ok ? 200 : 503).send({ status: ok ? 'ready' : 'unavailable', db, storage });
-  });
+    return { ok: db && storage, body: { status: db && storage ? 'ready' : 'unavailable', db, storage } };
+  };
+  for (const prefix of ['', '/api']) {
+    app.get(`${prefix}/health`, async () => ({ status: 'ok' }));
+    app.get(`${prefix}/ready`, async (_req, reply) => {
+      const r = await readiness();
+      return reply.code(r.ok ? 200 : 503).send(r.body);
+    });
+  }
   app.get('/metrics', async (req, reply) => {
     const token = ctx.config.METRICS_TOKEN;
     if (token && req.headers.authorization !== `Bearer ${token}`) return reply.code(401).send();

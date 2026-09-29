@@ -435,3 +435,16 @@ describe('admin developer tools', () => {
     expect((await admin.get(url(site.website.id, 'event'))).statusCode).toBe(409);
   });
 });
+
+describe('health endpoints', () => {
+  it('serves liveness and readiness at the root and under /api', async () => {
+    for (const prefix of ['', '/api']) {
+      const live = await t.app.inject({ method: 'GET', url: `${prefix}/health` });
+      expect(live.statusCode).toBe(200);
+      expect(live.json()).toEqual({ status: 'ok' });
+      const ready = await t.app.inject({ method: 'GET', url: `${prefix}/ready` });
+      expect(ready.statusCode).toBe(200);
+      expect(ready.json()).toMatchObject({ status: 'ready', db: true, storage: true });
+    }
+  });
+});

@@ -1,4 +1,6 @@
 import { UnrecoverableError, Worker } from 'bullmq';
+import { createServer } from 'node:http';
+import { sql } from 'drizzle-orm';
 import { createContext } from './bootstrap.js';
 import { QUEUES } from './context.js';
 import { runMaintenance } from './jobs/maintenance.js';
@@ -35,10 +37,19 @@ photoWorker.on('completed', (job) => ctx.log.debug({ photoId: job.data.photoId }
 const maintenanceWorker = new Worker(QUEUES.maintenance, async () => runMaintenance(ctx), { connection: redis, concurrency: 1 });
 await ctx.queues.maintenance.upsertJobScheduler('tick', { every: 60_000 }, { name: 'tick', opts: { removeOnComplete: true, removeOnFail: 50 } });
 
+// Health endpoint for container orchestrators: 200 only while Redis and Postgres are reachable.
+const healthServer = createServer(async (req, res) => {
+  if (req.url !== '/health') return void res.writeHead(404).end();
+  const [redisOk, dbOk] = await Promise.all([redis.ping().then(() => true, () => false), ctx.db.execute(sql`select 1`).then(() => true, () => false)]);
+  res.writeHead(redisOk && dbOk ? 200 : 503, { 'content-type': 'application/json' }).end(JSON.stringify({ status: redisOk && dbOk ? 'ok' : 'unavailable', redis: redisOk, db: dbOk }));
+});
+healthServer.listen(Number(process.env.WORKER_HEALTH_PORT ?? 4002), '0.0.0.0');
+
 ctx.log.info({ concurrency }, 'worker started');
 
 const shutdown = async (signal: string) => {
   ctx.log.info({ signal }, 'worker shutting down');
+  healthServer.close();
   await Promise.allSettled([photoWorker.close(), maintenanceWorker.close()]);
   await Promise.allSettled([pool.end(), redis.quit()]);
   process.exit(0);
