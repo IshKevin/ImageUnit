@@ -19,4 +19,6 @@ curl -H "Authorization: Bearer $IU_KEY" https://api.example.com/api/v1/events
               "location": "Kigali", "downloadPolicy": "preview", "expiresAt": "…", "publicUrl": "https://photos.example.com/e/kigali-marathon-2026" }],
   "total": 1, "page": 1, "pageSize": 25 }
 ```
+Administrators can see all of this per event in the console (**Events → an event → Developer**): the exact endpoints, copy-ready cURL/JavaScript/Python snippets, which websites can reach the event, and a "Try it" preview of the real response for any website.
+
 Photo items include `urls.thumbnail`, `urls.preview` and (when permitted) `urls.download`; they are valid for one hour — re-request the list to refresh. Errors are `{ "error": { "code", "message" } }` with 401 (bad key), 403 (revoked/scope/origin), 404, 429 (rate limit; per-key, default 600/min).
