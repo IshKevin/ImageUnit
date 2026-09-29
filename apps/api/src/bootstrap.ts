@@ -16,8 +16,9 @@ export function createLogger(config: Config) {
 export async function createContext() {
   const config = loadConfig();
   const log = createLogger(config);
-  const { db, pool } = createDb(config.DATABASE_URL);
+  const { db, pool } = createDb(config.DATABASE_URL, (err) => log.error({ err }, 'postgres pool error'));
   const redis = createRedis(config.REDIS_URL);
+  redis.on('error', (err) => log.error({ err: err.message }, 'redis error'));
   const storage = createS3Storage(config);
   await storage.ensureReady();
   const ctx: AppContext = { config, db, storage, redis, queues: createQueues(redis), log };

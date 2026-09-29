@@ -1,4 +1,6 @@
-version: '3.8'
+# Requires Docker Compose v2: use `docker compose ...` or `make up`. The legacy `docker-compose` v1 rejects this file on purpose
+# (it crashes and destroys containers on current Docker versions).
+name: imageunit
 services:
   postgres:
     image: postgres:18-alpine

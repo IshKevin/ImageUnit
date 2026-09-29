@@ -15,7 +15,7 @@ docs/      runbook, data-protection checklist, website API
 ```bash
 cp .env.example .env
 npm install
-npm run infra:up          # (Docker Compose v2: `docker compose`, not `docker-compose`) Postgres :5440, Redis :6390, MinIO :9100 (console :9101)
+npm run infra:up          # = `docker compose up -d --wait` (Compose v2 only; the file is `compose.yaml`). Postgres :5440, Redis :6390, MinIO :9100 (console :9101)
 npm run dev:api           # http://localhost:4000  (applies migrations, creates bootstrap admin)
 npm run dev:worker        # image processing + maintenance
 npm run dev:web           # http://localhost:4001
