@@ -29,10 +29,20 @@ describe('configuration', () => {
     expect(c.METRICS_TOKEN).toBeUndefined();
   });
 
+  it('derives secure cookies and proxy trust from an https public URL, and accepts loose booleans', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const https = loadConfig({ ...base, NODE_ENV: 'production', PUBLIC_WEB_URL: 'https://photos.example.com' });
+    expect(https).toMatchObject({ COOKIE_SECURE: true, TRUST_PROXY: true });
+    const http = loadConfig({ ...base, PUBLIC_WEB_URL: 'http://localhost:4001' });
+    expect(http).toMatchObject({ COOKIE_SECURE: false, TRUST_PROXY: false });
+    expect(loadConfig({ ...base, COOKIE_SECURE: 'True', TRUST_PROXY: '1' })).toMatchObject({ COOKIE_SECURE: true, TRUST_PROXY: true });
+    expect(loadConfig({ ...base, COOKIE_SECURE: 'NO' }).COOKIE_SECURE).toBe(false);
+  });
+
   it('refuses insecure production settings', async () => {
     const { loadConfig } = await import('../src/config.js');
-    expect(() => loadConfig({ ...base, NODE_ENV: 'production', COOKIE_SECURE: 'false' })).toThrow(/COOKIE_SECURE/);
-    expect(() => loadConfig({ ...base, NODE_ENV: 'production', COOKIE_SECURE: 'true', SESSION_SECRET: 'change-me-to-64-random-hex-chars-change-me-to-64' })).toThrow(/placeholder/);
-    expect(loadConfig({ ...base, NODE_ENV: 'production', COOKIE_SECURE: 'true' }).NODE_ENV).toBe('production');
+    expect(() => loadConfig({ ...base, NODE_ENV: 'production', PUBLIC_WEB_URL: 'https://photos.example.com', COOKIE_SECURE: 'false' })).toThrow(/COOKIE_SECURE/);
+    expect(() => loadConfig({ ...base, NODE_ENV: 'production', PUBLIC_WEB_URL: 'https://photos.example.com', SESSION_SECRET: 'change-me-to-64-random-hex-chars-change-me-to-64' })).toThrow(/placeholder/);
+    expect(() => loadConfig({ ...base, COOKIE_SECURE: 'maybe' })).toThrow(/Invalid environment/);
   });
 });

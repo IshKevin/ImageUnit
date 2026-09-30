@@ -1,9 +1,14 @@
 import { z } from 'zod';
 
-const bool = z
-  .enum(['true', 'false'])
-  .default('false')
-  .transform((v) => v === 'true');
+/** Accepts true/false, 1/0, yes/no, on/off in any case; unset stays undefined so callers can pick a default. */
+const looseBool = z.preprocess((v) => {
+  if (typeof v !== 'string') return v;
+  const s = v.trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(s)) return true;
+  if (['false', '0', 'no', 'off'].includes(s)) return false;
+  return v; // let zod report it
+}, z.boolean().optional());
+const bool = looseBool.transform((v) => v ?? false);
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -19,19 +24,20 @@ const schema = z.object({
   S3_SECRET_KEY: z.string().min(1),
   S3_FORCE_PATH_STYLE: bool,
   SESSION_SECRET: z.string().min(32),
-  COOKIE_SECURE: bool,
+  COOKIE_SECURE: looseBool,
   BOOTSTRAP_ADMIN_EMAIL: z.string().email().optional(),
   BOOTSTRAP_ADMIN_PASSWORD: z.string().min(12).optional(),
   STORAGE_TOTAL_BYTES: z.coerce.number().default(10 * 1024 ** 4),
   MAX_UPLOAD_BYTES: z.coerce.number().default(100 * 1024 * 1024),
   API_PUBLIC_URL: z.string().url().default('http://localhost:4000'),
-  TRUST_PROXY: bool,
+  TRUST_PROXY: looseBool,
   LOGIN_RATE_LIMIT: z.coerce.number().default(10),
   METRICS_TOKEN: z.string().min(16).optional(),
   LOG_LEVEL: z.string().default('info'),
 });
 
-export type Config = z.infer<typeof schema>;
+// COOKIE_SECURE / TRUST_PROXY are resolved to plain booleans (see loadConfig).
+export type Config = Omit<z.infer<typeof schema>, 'COOKIE_SECURE' | 'TRUST_PROXY'> & { COOKIE_SECURE: boolean; TRUST_PROXY: boolean };
 
 export function loadConfig(input: NodeJS.ProcessEnv = process.env): Config {
   // Platforms (Docker Compose interpolation, Coolify, ...) pass unset optional variables as empty strings.
@@ -41,9 +47,12 @@ export function loadConfig(input: NodeJS.ProcessEnv = process.env): Config {
     const issues = parsed.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
-  if (parsed.data.NODE_ENV === 'production') {
-    if (!parsed.data.COOKIE_SECURE) throw new Error('COOKIE_SECURE must be true in production');
-    if (/change-?me/i.test(parsed.data.SESSION_SECRET)) throw new Error('SESSION_SECRET is still the placeholder value; generate a real one (openssl rand -hex 32)');
+  // An https public URL means TLS terminates at a reverse proxy in front of us: secure cookies and proxy trust follow.
+  const https = parsed.data.PUBLIC_WEB_URL.startsWith('https://');
+  const config: Config = { ...parsed.data, COOKIE_SECURE: parsed.data.COOKIE_SECURE ?? https, TRUST_PROXY: parsed.data.TRUST_PROXY ?? https };
+  if (config.NODE_ENV === 'production') {
+    if (https && !config.COOKIE_SECURE) throw new Error('COOKIE_SECURE=false with an https PUBLIC_WEB_URL: session cookies would be sent over plain HTTP. Remove COOKIE_SECURE or set it to true.');
+    if (/change-?me/i.test(config.SESSION_SECRET)) throw new Error('SESSION_SECRET is still the placeholder value; generate a real one (openssl rand -hex 32)');
   }
-  return parsed.data;
+  return config;
 }

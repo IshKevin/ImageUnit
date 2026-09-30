@@ -26,7 +26,14 @@ export function createLogger(config: Config) {
 }
 
 export async function createContext() {
-  const config = loadConfig();
+  let config: Config;
+  try {
+    config = loadConfig();
+  } catch (err) {
+    // A short, readable message in the container logs instead of a stack trace.
+    console.error(`\nImageUnit cannot start: ${(err as Error).message}\n`);
+    process.exit(1);
+  }
   const log = createLogger(config);
   const { db, pool } = createDb(config.DATABASE_URL, (err) => log.error({ err }, 'postgres pool error'));
   const redis = createRedis(config.REDIS_URL);

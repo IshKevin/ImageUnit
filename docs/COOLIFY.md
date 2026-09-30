@@ -13,8 +13,7 @@
 | `PUBLIC_WEB_URL` | `https://photos.example.com` | your web domain |
 | `API_PUBLIC_URL` | `https://api.example.com` | domain company websites call (`/api/v1/*`) |
 | `S3_PUBLIC_ENDPOINT` | `https://media.example.com` | domain browsers use for uploads/downloads |
-| `COOKIE_SECURE` | `true` | required in production |
-| `TRUST_PROXY` | `true` | Coolify's proxy sits in front |
+| `COOKIE_SECURE`, `TRUST_PROXY` | *(leave unset)* | default to `true` automatically when `PUBLIC_WEB_URL` starts with `https://`. Booleans accept `true/false/1/0/yes/no`. |
 | `METRICS_TOKEN` | random string | protects `/metrics` |
 | `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD` | your admin login | first boot only; remove afterwards |
 
@@ -79,3 +78,14 @@ node dist/db/reset-admin.js you@company.com            # creates the admin or re
 node dist/db/reset-admin.js you@company.com 'MyNewPassw0rd!'   # or choose the password (12+ chars, upper, lower, digit)
 ```
 It creates the account if it does not exist; otherwise it resets the password, makes the account an active administrator, clears any lockout and signs out all its sessions. The action is recorded in the audit log (`user.admin_recovered`). Only someone with shell access to the server can do this.
+
+## Troubleshooting: `api` is "unhealthy" / "dependency failed to start"
+
+If `api` exits within a second of starting, the app refused its configuration. Open the `api` container **logs** in Coolify: the first lines say exactly why, in one readable message, e.g.:
+
+* `ImageUnit cannot start: SESSION_SECRET is still the placeholder value` → set a real `SESSION_SECRET` (`openssl rand -hex 32`).
+* `ImageUnit cannot start: Invalid environment configuration: BOOTSTRAP_ADMIN_PASSWORD ...` → the bootstrap password needs 12+ characters (or remove both `BOOTSTRAP_ADMIN_*`).
+* `COOKIE_SECURE=false with an https PUBLIC_WEB_URL` → remove `COOKIE_SECURE` (it is derived automatically).
+* `SESSION_SECRET: Too small` → the secret must be at least 32 characters.
+
+Startup also retries the database and storage for about a minute, so a slow-starting Postgres does not cause this.
