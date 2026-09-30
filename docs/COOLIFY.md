@@ -67,3 +67,15 @@ That exact plain-text message comes from Coolify's proxy (Traefik) and means **n
    `docker inspect <name> --format '{{json .Config.Labels}}' | tr ',' '\n' | grep -i traefik`
    You should see a router rule containing `Host(`photos.example.com`)`. If none, step 1–2 did not take effect.
 6. **DNS points at this server** (`dig +short photos.example.com`). A wrong IP usually shows another app's 404 page.
+
+## Getting your first login (or recovering access)
+
+**First login.** On first boot the API creates one administrator from `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` (Coolify → Environment Variables), but only if no administrator exists yet. Set both, redeploy, sign in at your web domain, change the password, then delete the two variables.
+
+**Forgot the password, never set the variables, or locked out.** Open the `api` service's *Terminal* in Coolify (or `docker exec -it <api-container> sh` on the server) and run:
+
+```sh
+node dist/db/reset-admin.js you@company.com            # creates the admin or resets it, prints a new random password once
+node dist/db/reset-admin.js you@company.com 'MyNewPassw0rd!'   # or choose the password (12+ chars, upper, lower, digit)
+```
+It creates the account if it does not exist; otherwise it resets the password, makes the account an active administrator, clears any lockout and signs out all its sessions. The action is recorded in the audit log (`user.admin_recovered`). Only someone with shell access to the server can do this.
