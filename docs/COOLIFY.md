@@ -79,9 +79,19 @@ node dist/db/reset-admin.js you@company.com 'MyNewPassw0rd!'   # or choose the p
 ```
 It creates the account if it does not exist; otherwise it resets the password, makes the account an active administrator, clears any lockout and signs out all its sessions. The action is recorded in the audit log (`user.admin_recovered`). Only someone with shell access to the server can do this.
 
+## Check your variables before deploying
+
+Copy the variables from Coolify's *Environment Variables* page (Developer view) into a local text file and validate them with the exact rules the API applies at startup:
+
+```sh
+npm install                      # once
+npm run check-env -- coolify.env
+```
+It lists **every** problem at once (a URL missing `https://`, a password under 12 characters, a non-numeric size, a `METRICS_TOKEN` under 16 characters, ...) or prints `OK — the API would start`. Do not commit that file.
+
 ## Troubleshooting: `api` is "unhealthy" / "dependency failed to start"
 
-If `api` exits within a second of starting, the app refused its configuration. Open the `api` container **logs** in Coolify: the first lines say exactly why, in one readable message, e.g.:
+If `api` fails within a couple of seconds of starting, the app refused its configuration (the log looks like a health failure because Docker restarts the crashed container). Run `npm run check-env` above, or open the `api` container **logs** in Coolify (resource → *Logs* → `api`): the first lines say exactly why, in one readable message, e.g.:
 
 * `ImageUnit cannot start: SESSION_SECRET is still the placeholder value` → set a real `SESSION_SECRET` (`openssl rand -hex 32`).
 * `ImageUnit cannot start: Invalid environment configuration: BOOTSTRAP_ADMIN_PASSWORD ...` → the bootstrap password needs 12+ characters (or remove both `BOOTSTRAP_ADMIN_*`).

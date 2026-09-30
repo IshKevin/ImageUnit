@@ -33,7 +33,8 @@ const schema = z.object({
   TRUST_PROXY: looseBool,
   LOGIN_RATE_LIMIT: z.coerce.number().default(10),
   METRICS_TOKEN: z.string().min(16).optional(),
-  LOG_LEVEL: z.string().default('info'),
+  // Case-insensitive; an invalid level would otherwise crash the logger at startup.
+  LOG_LEVEL: z.preprocess((v) => (typeof v === 'string' ? v.trim().toLowerCase() : v), z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info')),
 });
 
 // COOKIE_SECURE / TRUST_PROXY are resolved to plain booleans (see loadConfig).

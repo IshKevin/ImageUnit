@@ -18,6 +18,7 @@
     "db:seed": "npm run db:seed -w @imageunit/api",
     "test": "npm run test -w @imageunit/api",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test:e2e": "npm run test -w @imageunit/e2e"
+    "test:e2e": "npm run test -w @imageunit/e2e",
+    "check-env": "npm run check-env -w @imageunit/api --"
   }
 }
