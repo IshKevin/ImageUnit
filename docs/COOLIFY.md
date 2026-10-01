@@ -17,7 +17,7 @@
 | `METRICS_TOKEN` | random string | protects `/metrics` |
 | `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD` | your admin login | first boot only; remove afterwards |
 
-Optional: `STORAGE_TOTAL_BYTES` (capacity shown in the dashboard), `MAX_UPLOAD_BYTES`, `WORKER_CONCURRENCY`, `LOG_LEVEL`.
+Optional: `STORAGE_TOTAL_BYTES` (capacity shown in the dashboard), `MAX_UPLOAD_BYTES` (photos, default 100 MB), `MAX_VIDEO_BYTES` (videos, default 2 GB), `WORKER_CONCURRENCY` (photo processing, default 4), `WORKER_VIDEO_CONCURRENCY` (simultaneous video conversions per worker, default 1), `LOG_LEVEL`.
 `ops/gen-env.sh` prints a full set of strong values you can paste in (`make prod-env DOMAIN=example.com`, then copy from `.env.production`).
 
 ## 2. Domains (Coolify → each service → Domains)
@@ -99,3 +99,10 @@ If `api` fails within a couple of seconds of starting, the app refused its confi
 * `SESSION_SECRET: Too small` → the secret must be at least 32 characters.
 
 Startup also retries the database and storage for about a minute, so a slow-starting Postgres does not cause this.
+
+## Video: what the server needs
+
+Videos are converted by the `worker` service with a bundled ffmpeg (no system install needed). Converting is CPU-heavy and works on a temporary copy of the file:
+* **CPU / RAM:** about 1 CPU core and 1 GB RAM per simultaneous conversion. Keep `WORKER_VIDEO_CONCURRENCY=1` on small servers; scale by adding `worker` replicas instead.
+* **Disk:** the worker needs free space in its container filesystem (`/tmp`) of roughly 2× the largest video (a 2 GB upload needs about 4 GB while it is processed). The temporary files are deleted afterwards, even when a conversion fails.
+* **Storage:** the original is kept untouched; each video also stores a smaller MP4 for playback and a poster image.

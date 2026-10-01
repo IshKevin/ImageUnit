@@ -14,7 +14,21 @@ export interface UploadItem {
   uploadUrl?: string;
 }
 
-const ACCEPTED = ['image/jpeg', 'image/png', 'image/webp', 'image/tiff', 'image/avif'];
+export const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/tiff', 'image/avif'];
+export const VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska'];
+export const ACCEPT_ATTR = [...IMAGE_TYPES, ...VIDEO_TYPES].join(',');
+const ACCEPTED = [...IMAGE_TYPES, ...VIDEO_TYPES];
+export const MAX_IMAGE_BYTES = 100 * 1024 * 1024;
+export const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
+export const isVideoFile = (f: { type: string }) => VIDEO_TYPES.includes(f.type);
+
+function validate(file: File): string | undefined {
+  if (!ACCEPTED.includes(file.type)) return `Unsupported type ${file.type || 'unknown'}`;
+  if (file.size === 0) return 'File is empty';
+  if (isVideoFile(file) && file.size > MAX_VIDEO_BYTES) return 'Video is larger than the 2 GB limit';
+  if (!isVideoFile(file) && file.size > MAX_IMAGE_BYTES) return 'Photo is larger than the 100 MB limit';
+  return undefined;
+}
 const CONCURRENCY = 4;
 const INIT_BATCH = 100;
 const COMPLETE_BATCH = 20;
@@ -63,8 +77,8 @@ export function useUploader(eventId: string, galleryId: string | undefined, onSe
 
   const addFiles = useCallback((files: File[]) => {
     const fresh: UploadItem[] = files.map((file) => {
-      const bad = !ACCEPTED.includes(file.type);
-      return { id: `u${idSeq.current++}`, file, status: bad ? 'failed' : 'queued', progress: 0, error: bad ? `Unsupported type ${file.type || 'unknown'}` : undefined };
+      const error = validate(file);
+      return { id: `u${idSeq.current++}`, file, status: error ? 'failed' : 'queued', progress: 0, error } as UploadItem;
     });
     sync([...itemsRef.current, ...fresh]);
   }, []);
@@ -153,7 +167,7 @@ export function useUploader(eventId: string, galleryId: string | undefined, onSe
         } catch (e) {
           patch(f.id, { error: (e as Error).message });
         }
-      } else if (ACCEPTED.includes(f.file.type)) patch(f.id, { status: 'queued', error: undefined, progress: 0 });
+      } else if (!validate(f.file)) patch(f.id, { status: 'queued', error: undefined, progress: 0 });
     }
     void run();
   }, [patch, run]);

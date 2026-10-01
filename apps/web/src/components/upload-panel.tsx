@@ -1,9 +1,9 @@
 'use client';
 
 import clsx from 'clsx';
-import { CheckCircle2, ImagePlus, RotateCcw, UploadCloud, X, XCircle } from 'lucide-react';
+import { CheckCircle2, ImagePlus, RotateCcw, Video, UploadCloud, X, XCircle } from 'lucide-react';
 import { useRef, useState } from 'react';
-import { useUploader } from '@/lib/uploader';
+import { ACCEPT_ATTR, isVideoFile, useUploader } from '@/lib/uploader';
 import { bytes } from '@/lib/format';
 import { Button, Card, Progress, Spinner } from './ui';
 
@@ -37,13 +37,15 @@ export function UploadPanel({ eventId, galleryId, onSettled, disabled }: { event
       >
         <UploadCloud className="size-8 text-muted" aria-hidden />
         <div>
-          <p className="font-medium">Drag photographs here</p>
-          <p className="text-sm text-muted">JPEG, PNG, WebP, TIFF or AVIF · up to 100 MB each · thousands at a time</p>
+          <p className="font-medium">Drag photos and videos here</p>
+          <p className="text-sm text-muted">JPEG, PNG, WebP, TIFF, AVIF, MP4, MOV, WebM or MKV</p>
+          <p className="text-sm text-muted">Photos up to 100 MB · videos up to 2 GB</p>
         </div>
-        <input ref={input} type="file" multiple accept="image/jpeg,image/png,image/webp,image/tiff,image/avif" hidden onChange={(e) => { add(e.target.files); e.target.value = ''; }} />
+        <input ref={input} type="file" multiple accept={ACCEPT_ATTR} aria-label="Choose photos or videos" hidden onChange={(e) => { add(e.target.files); e.target.value = ''; }} />
         <Button variant="primary" onClick={() => input.current?.click()} disabled={disabled}>
           <ImagePlus className="size-4" /> Choose files
         </Button>
+        <p className="text-xs text-muted">Videos are converted in the background after upload — this can take a few minutes</p>
         {disabled && <p className="text-xs text-muted">Uploads are closed for this event.</p>}
       </div>
 
@@ -69,6 +71,7 @@ export function UploadPanel({ eventId, galleryId, onSettled, disabled }: { event
               {visible.map((i) => (
                 <li key={i.id} className="flex items-center gap-3 px-3 py-2">
                   {i.status === 'failed' ? <XCircle className="size-4 shrink-0 text-danger" /> : i.status === 'done' ? <CheckCircle2 className="size-4 shrink-0 text-success" /> : i.status === 'queued' ? <X className="size-4 shrink-0 opacity-0" /> : <Spinner className="size-4" />}
+                  {isVideoFile(i.file) && <Video className="size-4 shrink-0 text-muted" aria-label="Video" />}
                   <span className="min-w-0 flex-1 truncate">{i.file.name}</span>
                   {i.status === 'failed' ? <span className="truncate text-xs text-danger">{i.error}</span> : i.status === 'uploading' ? <span className="w-12 text-right text-xs tabular-nums text-muted">{Math.round(i.progress * 100)}%</span> : <span className="text-xs text-muted">{i.status === 'queued' ? bytes(i.file.size) : i.status}</span>}
                 </li>

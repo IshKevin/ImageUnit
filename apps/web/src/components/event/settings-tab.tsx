@@ -16,6 +16,8 @@ export function SettingsTab({ event }: { event: EventItem }) {
   const router = useRouter();
   const isAdmin = user?.role === 'admin';
   const readOnly = ['archived', 'scheduled_for_deletion'].includes(event.status) && !isAdmin;
+  const canPublish = !!user?.permissions.includes('events:publish');
+  const accessLocked = !isAdmin && !canPublish && user?.id !== event.ownerId;
   const expiryLocked = !isAdmin && event.status !== 'draft';
   const [f, setF] = useState({
     name: event.name, description: event.description, eventDate: event.eventDate ?? '', location: event.location ?? '',
@@ -31,9 +33,9 @@ export function SettingsTab({ event }: { event: EventItem }) {
   const save = useMutation({
     mutationFn: () => patch(`/events/${event.id}`, {
       name: f.name, description: f.description, eventDate: f.eventDate || null, location: f.location || null,
-      visibility: f.visibility, downloadPolicy: f.downloadPolicy,
-      ...(f.password && { password: f.password }),
-      ...(!expiryLocked && { expiresAt: f.expiresAt ? new Date(f.expiresAt).toISOString() : null }),
+      ...(!accessLocked && { visibility: f.visibility, downloadPolicy: f.downloadPolicy }),
+      ...(!accessLocked && f.password && { password: f.password }),
+      ...(!accessLocked && !expiryLocked && { expiresAt: f.expiresAt ? new Date(f.expiresAt).toISOString() : null }),
     }),
     onSuccess: () => { toast.success('Settings saved'); set('password', ''); refresh(); },
   });
@@ -50,7 +52,6 @@ export function SettingsTab({ event }: { event: EventItem }) {
   });
 
   const copy = async () => { await navigator.clipboard.writeText(event.shareUrl); setCopied(true); setTimeout(() => setCopied(false), 1500); };
-  const canPublish = user?.permissions.includes('events:publish');
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
@@ -65,21 +66,22 @@ export function SettingsTab({ event }: { event: EventItem }) {
                 <Field label="Location"><Input value={f.location} onChange={(e) => set('location', e.target.value)} /></Field>
               </div>
               <Field label="Description"><Textarea value={f.description} onChange={(e) => set('description', e.target.value)} /></Field>
+              {accessLocked && <p role="note" className="text-xs text-muted">Only the event owner or an administrator can change access settings</p>}
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Who can view">
-                  <Select value={f.visibility} onChange={(e) => set('visibility', e.target.value as EventItem['visibility'])}>
+                  <Select disabled={accessLocked} value={f.visibility} onChange={(e) => set('visibility', e.target.value as EventItem['visibility'])}>
                     <option value="public">Public</option><option value="unlisted">Unlisted (link only)</option><option value="private">Password protected</option>
                   </Select>
                 </Field>
                 <Field label="Downloads">
-                  <Select value={f.downloadPolicy} onChange={(e) => set('downloadPolicy', e.target.value as DownloadPolicy)}>
+                  <Select disabled={accessLocked} value={f.downloadPolicy} onChange={(e) => set('downloadPolicy', e.target.value as DownloadPolicy)}>
                     <option value="disabled">Disabled</option><option value="preview">Preview quality</option><option value="full">Full resolution</option>
                   </Select>
                 </Field>
               </div>
-              {f.visibility === 'private' && <Field label={event.hasPassword ? 'Change password' : 'Password'} hint={event.hasPassword ? 'Leave blank to keep the current password. Changing it signs out existing visitors.' : 'Required for private events.'}><Input minLength={6} value={f.password} onChange={(e) => set('password', e.target.value)} /></Field>}
+              {f.visibility === 'private' && <Field label={event.hasPassword ? 'Change password' : 'Password'} hint={event.hasPassword ? 'Leave blank to keep the current password. Changing it signs out existing visitors.' : 'Required for private events.'}><Input minLength={6} disabled={accessLocked} value={f.password} onChange={(e) => set('password', e.target.value)} /></Field>}
               <Field label="Public access ends" hint={expiryLocked ? 'Only an administrator can change access after publishing.' : 'Expiring hides the gallery; photographs are retained.'}>
-                <Input type="datetime-local" disabled={expiryLocked} value={f.expiresAt} onChange={(e) => set('expiresAt', e.target.value)} />
+                <Input type="datetime-local" disabled={expiryLocked || accessLocked} value={f.expiresAt} onChange={(e) => set('expiresAt', e.target.value)} />
               </Field>
             </fieldset>
             <ErrorNote error={save.error} />

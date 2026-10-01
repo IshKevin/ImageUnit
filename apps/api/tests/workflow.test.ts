@@ -387,7 +387,7 @@ describe('admin developer tools', () => {
     let dev = (await admin.get(`/api/admin/events/${ev.id}/developer`)).json();
     expect(dev.exposure.exposed).toBe(false); // draft
     expect(dev.exposure.reason).toMatch(/draft/);
-    expect(dev.endpoints.map((e: { key: string }) => e.key)).toEqual(['event', 'galleries', 'photos', 'media']);
+    expect(dev.endpoints.map((e: { key: string }) => e.key)).toEqual(['event', 'galleries', 'photos', 'search', 'collections', 'media']);
     expect(dev.endpoints[0].url).toContain(`/api/v1/events/${ev.id}`);
 
     await publish(owner, ev.id);

@@ -12,7 +12,7 @@ import { clientDto } from './dto.js';
 const RESOURCES = {
   event: { scope: 'events:read', path: (id: string) => `/events/${id}` },
   galleries: { scope: 'galleries:read', path: (id: string) => `/events/${id}/galleries` },
-  photos: { scope: 'images:read', path: (id: string) => `/events/${id}/photos` },
+  photos: { scope: 'images:read', path: (id: string) => `/events/${id}/media` },
 } as const;
 
 /** Why websites can or cannot currently see an event. */
@@ -41,6 +41,8 @@ export const developerRoutes: FastifyPluginAsync = async (app) => {
       exposure: state,
       endpoints: [
         ...Object.entries(RESOURCES).map(([key, r]) => ({ key, method: 'GET', url: `${base}${r.path(ev.id)}`, scope: r.scope })),
+        { key: 'search', method: 'GET', url: `${base}/media?q=&type=&tag=`, scope: 'images:read', note: 'Search every media item this credential may see.' },
+        { key: 'collections', method: 'GET', url: `${base}/collections`, scope: 'collections:read', note: 'Curated sets of media; /collections/{slug}/media lists their items.' },
         { key: 'media', method: 'GET', url: `${base}/media/{photoId}/{thumbnail|preview|download}`, scope: 'images:read (downloads:read for download)', note: 'Use the signed urls returned by the photos endpoint; they expire after 1 hour.' },
       ],
       websites: clients.map((c) => ({

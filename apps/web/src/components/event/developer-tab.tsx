@@ -27,15 +27,16 @@ function snippet(lang: Lang, base: string, id: string): string {
   if (lang === 'curl')
     return `# Server-side only: never put the key in browser code.
 curl -H "Authorization: Bearer $IU_KEY" \\
-  "${base}/events/${id}/photos?pageSize=25"`;
+  "${base}/events/${id}/media?pageSize=25"`;
   if (lang === 'javascript')
     return `// Run on your server (Node 18+, Next.js route handler, etc.)
-const res = await fetch("${base}/events/${id}/photos?pageSize=25", {
+const res = await fetch("${base}/events/${id}/media?pageSize=25", {
   headers: { Authorization: \`Bearer \${process.env.IU_KEY}\` },
 });
 if (!res.ok) throw new Error(\`ImageUnit API \${res.status}\`);
 const { items, total } = await res.json();
 
+// Each item is a photo or a video (item.type) and carries its title, description, tags and event details.
 // items[i].urls.thumbnail / .preview are signed, expire after 1 hour and
 // can be used directly in <img src="..."> in the visitor's browser.`;
   return `import os, requests
@@ -47,7 +48,7 @@ res = requests.get(
     timeout=10,
 )
 res.raise_for_status()
-photos = res.json()["items"]  # each has urls.thumbnail / urls.preview`;
+media = res.json()["items"]  # photos and videos; each has title, description, tags, event{...}, urls.thumbnail / urls.preview`;
 }
 
 export function DeveloperTab({ eventId }: { eventId: string }) {

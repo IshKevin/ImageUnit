@@ -29,6 +29,16 @@ make prod-ps
 5. Managed Postgres/Redis/S3 instead: override `DATABASE_URL`, `REDIS_URL`, `S3_ENDPOINT` (and the S3 keys) for the `api` and `worker` services in a `compose.override.yaml`, start only `api worker web`, and put your own TLS proxy in front. The object storage is only ever accessed through the S3 API, so any S3-compatible service works.
 6. Object storage note: MinIO was archived upstream in April 2026 and is no longer used. Browser CORS on the storage gateway is limited to `PUBLIC_WEB_URL` (`-s3.allowedOrigins`).
 
+## Roles
+
+| Role | Can | Cannot |
+|---|---|---|
+| Administrator | everything, including deletion, users, websites, settings, audit | |
+| Editor | see every event; rename events; edit media titles, descriptions, tags; organise galleries; hide/show media; build collections; use the library and its bulk tools | upload, publish, delete, change an event's access settings (unless granted), manage users/websites/settings |
+| Photographer | create and publish their own events, upload, edit their own media | see or touch other photographers' events; collections; deletion |
+
+Permissions can be adjusted per user in **Users**; admin-only permissions (delete, users, websites, settings, audit) can never be granted to others.
+
 ## Deploy checklist
 1. Set every variable in `.env.example`; in production `COOKIE_SECURE=true`, `TRUST_PROXY=true` behind a reverse proxy, a 64-char random `SESSION_SECRET`, and a `METRICS_TOKEN`.
 2. **Bucket CORS** must allow `PUT` from the web origin with the `Content-Type` header (browsers upload directly to storage).
