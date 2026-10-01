@@ -62,8 +62,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       ctx.db
         .select({ userId: users.id, name: users.name, email: users.email, quota: users.storageQuotaBytes, bytes: BYTES, photos: count(photos.id) })
         .from(users)
-        .leftJoin(events, eq(events.ownerId, users.id))
-        .leftJoin(photos, eq(photos.eventId, events.id))
+        .leftJoin(photos, eq(photos.uploaderId, users.id))
         .where(eq(users.role, 'photographer'))
         .groupBy(users.id)
         .orderBy(desc(BYTES))

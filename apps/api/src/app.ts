@@ -16,6 +16,7 @@ import { authRoutes } from './modules/auth.js';
 import { clientRoutes } from './modules/clients.js';
 import { collectionRoutes } from './modules/collections.js';
 import { libraryRoutes } from './modules/library.js';
+import { memberRoutes } from './modules/members.js';
 import { developerRoutes } from './modules/developer.js';
 import { eventRoutes } from './modules/events.js';
 import { galleryRoutes } from './modules/galleries.js';
@@ -106,6 +107,7 @@ export async function buildApp(ctx: AppContext, opts: { rateLimitMax?: number } 
       await api.register(eventRoutes);
       await api.register(galleryRoutes);
       await api.register(libraryRoutes);
+      await api.register(memberRoutes);
       await api.register(collectionRoutes);
       await api.register(photoRoutes);
       await api.register(publicRoutes);

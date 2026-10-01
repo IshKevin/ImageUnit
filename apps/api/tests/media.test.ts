@@ -208,7 +208,6 @@ describe('editor role', () => {
     expect((await editor.patch(`/api/events/${ev.id}`, { downloadPolicy: 'full' })).statusCode).toBe(403);
     expect((await editor.post(`/api/events/${ev.id}/unpublish`)).statusCode).toBe(403);
     expect((await editor.post(`/api/events/${ev.id}/uploads`, { files: [{ filename: 'a.jpg', contentType: 'image/jpeg', sizeBytes: 10 }] })).statusCode).toBe(403);
-    expect((await editor.post('/api/events', { name: 'New one' })).statusCode).toBe(403);
     expect((await editor.del(`/api/photos/${id}`)).statusCode).toBe(403);
     expect((await editor.post(`/api/events/${ev.id}/archive`)).statusCode).toBe(403);
     for (const url of ['/api/admin/users', '/api/admin/audit', '/api/admin/websites', '/api/admin/settings', '/api/admin/stats']) expect((await editor.get(url)).statusCode, url).toBe(403);

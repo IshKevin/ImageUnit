@@ -1,7 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { AppContext } from '../context.js';
-import { events, sessions, users, type Event, type User } from '../db/schema.js';
+import { eventMembers, events, sessions, users, type Event, type User } from '../db/schema.js';
 import { forbidden, notFound, unauthorized } from '../lib/errors.js';
 import { sha256 } from '../lib/crypto.js';
 import { effectivePermissions, seesAllEvents, type Permission } from '../lib/permissions.js';
@@ -65,15 +65,24 @@ export function makeGuards(ctx: AppContext) {
 export type Guards = ReturnType<typeof makeGuards>;
 
 /**
- * Loads an event the caller may manage. Photographers only ever see their own;
- * anything else is reported as 404 so event existence is not leaked.
+ * Loads an event for the caller, at the level they need:
+ *  - 'manage'     owner, editors and administrators (settings, galleries, publishing, inviting);
+ *  - 'contribute' additionally photographers invited to the event (view it, upload, edit their own uploads).
+ * Anyone else gets 404 so an event's existence is not leaked. The level granted is recorded in req.eventAccess.
  */
-export async function loadManagedEvent(ctx: AppContext, req: FastifyRequest, eventId: string): Promise<Event> {
+export async function loadManagedEvent(ctx: AppContext, req: FastifyRequest, eventId: string, level: 'manage' | 'contribute' = 'manage'): Promise<Event> {
   if (!/^[0-9a-f-]{36}$/i.test(eventId)) throw notFound('Event not found');
   const [ev] = await ctx.db.select().from(events).where(eq(events.id, eventId));
   if (!ev) throw notFound('Event not found');
   const u = req.user!;
-  if (!seesAllEvents(u) && ev.ownerId !== u.id) throw notFound('Event not found');
+  if (seesAllEvents(u) || ev.ownerId === u.id) {
+    req.eventAccess = 'manage';
+    return ev;
+  }
+  const [member] = await ctx.db.select({ userId: eventMembers.userId }).from(eventMembers).where(and(eq(eventMembers.eventId, ev.id), eq(eventMembers.userId, u.id)));
+  if (!member) throw notFound('Event not found');
+  if (level === 'manage') throw forbidden('Only the event owner or an editor can do that');
+  req.eventAccess = 'contribute';
   return ev;
 }
 

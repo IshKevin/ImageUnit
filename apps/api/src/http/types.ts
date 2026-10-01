@@ -11,5 +11,7 @@ declare module 'fastify' {
     sessionId?: string;
     apiClient?: ApiClient;
     perms?: Set<Permission>;
+    /** Level of access the caller has to the event loaded by loadManagedEvent. */
+    eventAccess?: 'manage' | 'contribute';
   }
 }

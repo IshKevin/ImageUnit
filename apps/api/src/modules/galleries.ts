@@ -20,7 +20,7 @@ export const galleryRoutes: FastifyPluginAsync = async (app) => {
   const guard = makeGuards(ctx);
 
   app.get('/events/:id/galleries', { preHandler: guard.perm('events:view') }, async (req) => {
-    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id);
+    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id, 'contribute');
     const rows = await ctx.db
       .select({
         gallery: galleries,

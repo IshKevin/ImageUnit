@@ -44,7 +44,21 @@ export function createWebsiteViews(ctx: AppContext) {
     return `${ctx.config.API_PUBLIC_URL}/api/v1/media/${photoId}/${kind}?c=${client.id}&exp=${exp}&sig=${sig}`;
   };
 
-  const eventJson = (e: Event) => ({
+  /** Effective cover photo id: the chosen one if it is ready, otherwise the first visible photograph. */
+  async function effectiveCoverId(e: Pick<Event, 'id' | 'coverPhotoId'>): Promise<string | null> {
+    if (e.coverPhotoId) {
+      const [c] = await ctx.db.select({ id: photos.id }).from(photos).where(and(eq(photos.id, e.coverPhotoId), eq(photos.eventId, e.id), eq(photos.status, 'ready')));
+      if (c) return c.id;
+    }
+    const [first] = await ctx.db.select({ id: photos.id }).from(photos).where(and(eq(photos.eventId, e.id), eq(photos.status, 'ready'), eq(photos.isHidden, false))).orderBy(asc(photos.sortOrder), asc(photos.takenAt), asc(photos.createdAt)).limit(1);
+    return first?.id ?? null;
+  }
+
+  const eventJson = async (e: Event, client: ApiClient) => {
+    const coverId = client.scopes.includes('images:read') ? await effectiveCoverId(e) : null;
+    return { ...baseEventJson(e), cover: coverId ? { thumbnail: mediaUrl(client, coverId, 'thumbnail'), preview: mediaUrl(client, coverId, 'preview') } : null };
+  };
+  const baseEventJson = (e: Event) => ({
     id: e.id,
     slug: e.slug,
     name: e.name,
@@ -63,7 +77,7 @@ export function createWebsiteViews(ctx: AppContext) {
       ctx.db.select().from(events).where(where).orderBy(sql`${events.eventDate} desc nulls last`, asc(events.id)).limit(limit).offset(offset),
       ctx.db.select({ total: count() }).from(events).where(where),
     ]);
-    return { items: rows.map(eventJson), total, page, pageSize };
+    return { items: await Promise.all(rows.map((e) => eventJson(e, client))), total, page, pageSize };
   }
 
   async function galleriesOf(ev: Event) {

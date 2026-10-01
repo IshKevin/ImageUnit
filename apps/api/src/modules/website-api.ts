@@ -84,7 +84,7 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
   });
 
   app.get('/v1/events/:id', { preHandler: authenticate('events:read') }, async (req) => ({
-    event: views.eventJson(await loadEvent(req.apiClient!, (req.params as { id: string }).id)),
+    event: await views.eventJson(await loadEvent(req.apiClient!, (req.params as { id: string }).id), req.apiClient!),
   }));
 
   app.get('/v1/events/:id/galleries', { preHandler: authenticate('galleries:read') }, async (req) => {
@@ -155,7 +155,7 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
       .from(photos)
       .innerJoin(events, eq(events.id, photos.eventId))
       .leftJoin(galleries, eq(galleries.id, photos.galleryId))
-      .where(and(eq(photos.id, id), eq(photos.status, 'ready'), eq(photos.isHidden, false), ...visibleEvents(client, false)));
+      .where(and(eq(photos.id, id), eq(photos.status, 'ready'), sql`(${photos.isHidden} = false or ${events.coverPhotoId} = ${photos.id})`, ...visibleEvents(client, false)));
     if (!row || !isPubliclyAvailable(row.ev) || (row.g && !row.g.isVisible)) throw notFound('Photograph not found');
 
     let key: string | null;

@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { events, galleries, photos, users, type Photo } from '../db/schema.js';
+import { galleries, photos, users, type Photo } from '../db/schema.js';
 import { isUuid, loadManagedEvent, makeGuards } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
@@ -18,12 +18,28 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
   const limitFor = (contentType: string) => (mediaKindOf(contentType) === 'video' ? ctx.config.MAX_VIDEO_BYTES : ctx.config.MAX_UPLOAD_BYTES);
   const humanSize = (n: number) => (n >= 1024 ** 3 ? `${+(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1048576)} MB`);
 
-  async function loadPhoto(req: FastifyRequest, id: string) {
+  async function loadPhoto(req: FastifyRequest, id: string, level: 'manage' | 'contribute' = 'manage') {
     if (!isUuid(id)) throw notFound('Photograph not found');
     const [p] = await ctx.db.select().from(photos).where(eq(photos.id, id));
     if (!p) throw notFound('Photograph not found');
-    const event = await loadManagedEvent(ctx, req, p.eventId); // ownership enforced here
+    const event = await loadManagedEvent(ctx, req, p.eventId, level); // access enforced here
     return { photo: p, event };
+  }
+
+  /**
+   * Uploading needs images:upload. The one exception is a cover-only image, which an event's owner or editor may add
+   * with just events:edit (editors do not upload event photos).
+   */
+  function requireUploadRight(req: FastifyRequest, opts: { cover?: boolean } = {}) {
+    const perms = req.perms!;
+    if (perms.has('images:upload')) return;
+    if (opts.cover && perms.has('events:edit')) return;
+    throw forbidden('Missing permission: images:upload');
+  }
+
+  /** Invited photographers may only act on what they uploaded themselves. */
+  function ownUploadOnly(req: FastifyRequest, p: Pick<Photo, 'uploaderId'>) {
+    if (req.eventAccess === 'contribute' && p.uploaderId !== req.user!.id) throw forbidden('You can only change your own uploads');
   }
 
   async function photoView(p: Photo) {
@@ -33,6 +49,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
       eventId: p.eventId,
       galleryId: p.galleryId,
       mediaType: p.mediaType,
+      uploaderId: p.uploaderId,
       filename: p.filename,
       title: p.title,
       description: p.description,
@@ -58,16 +75,20 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
 
   // ---------- upload ----------
 
-  app.post('/events/:id/uploads', { preHandler: guard.perm('images:upload') }, async (req) => {
+  app.post('/events/:id/uploads', { preHandler: guard.user }, async (req) => {
     const body = parse(
       z.object({
         galleryId: z.string().uuid().optional(),
+        /** Upload as a hidden, cover-only image (not shown in the gallery). Managers only. */
+        asCover: z.boolean().optional(),
         files: z
           .array(
             z.object({
               filename: z.string().trim().min(1).max(255),
               contentType: z.string().max(100),
               sizeBytes: z.number().int().positive(),
+              /** Folder uploads: the gallery to put this file in, created on first use. */
+              galleryName: z.string().trim().min(1).max(120).optional(),
             }),
           )
           .min(1)
@@ -75,8 +96,10 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
       }),
       req.body,
     );
-    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id);
+    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id, 'contribute');
     if (!['draft', 'active'].includes(ev.status)) throw conflict(`Uploads are closed for ${ev.status} events`);
+    if (body.asCover && req.eventAccess !== 'manage') throw forbidden('Only the event owner or an editor can set the cover');
+    requireUploadRight(req, { cover: body.asCover });
 
     if (body.galleryId) {
       const [g] = await ctx.db.select({ id: galleries.id }).from(galleries).where(and(eq(galleries.id, body.galleryId), eq(galleries.eventId, ev.id)));
@@ -91,16 +114,30 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
       return false;
     });
 
-    // Quota applies to the event owner's total footprint.
-    const [owner] = await ctx.db.select().from(users).where(eq(users.id, ev.ownerId));
-    if (owner?.storageQuotaBytes) {
+    // Quota applies to the uploader's own total footprint, wherever they uploaded.
+    const [uploader] = await ctx.db.select().from(users).where(eq(users.id, req.user!.id));
+    if (uploader?.storageQuotaBytes) {
       const [{ used } = { used: 0 }] = await ctx.db
         .select({ used: sql<number>`coalesce(sum(size_bytes + preview_size_bytes + thumb_size_bytes), 0)::float8` })
         .from(photos)
-        .innerJoin(events, eq(events.id, photos.eventId))
-        .where(eq(events.ownerId, owner.id));
+        .where(eq(photos.uploaderId, uploader.id));
       const incoming = accepted.reduce((s, f) => s + f.sizeBytes, 0);
-      if (used + incoming > owner.storageQuotaBytes) throw new AppError(413, 'quota_exceeded', 'Storage quota exceeded');
+      if (used + incoming > uploader.storageQuotaBytes) throw new AppError(413, 'quota_exceeded', 'Storage quota exceeded');
+    }
+
+    // Folder uploads name a gallery per subfolder: reuse an existing gallery of that name (case-insensitive) or create it.
+    const galleryByName = new Map<string, string>();
+    const wanted = [...new Set(accepted.map((f) => f.galleryName?.toLowerCase()).filter((n): n is string => !!n))];
+    if (wanted.length) {
+      const existing = await ctx.db.select({ id: galleries.id, name: galleries.name, sortOrder: galleries.sortOrder }).from(galleries).where(eq(galleries.eventId, ev.id));
+      for (const g of existing) galleryByName.set(g.name.toLowerCase(), g.id);
+      let nextOrder = existing.reduce((m, g) => Math.max(m, g.sortOrder), -1) + 1;
+      const toCreate = accepted.map((f) => f.galleryName).filter((n, i, arr): n is string => !!n && !galleryByName.has(n.toLowerCase()) && arr.findIndex((x) => x?.toLowerCase() === n.toLowerCase()) === i);
+      if (existing.length + toCreate.length > 100) throw badRequest('An event can have at most 100 galleries. Upload without grouping by folder, or merge some folders.');
+      for (const name of toCreate) {
+        const [g] = await ctx.db.insert(galleries).values({ eventId: ev.id, name, sortOrder: nextOrder++ }).returning({ id: galleries.id });
+        galleryByName.set(name.toLowerCase(), g!.id);
+      }
     }
 
     const galleryId = body.galleryId ?? (await ctx.db.select({ id: galleries.id }).from(galleries).where(eq(galleries.eventId, ev.id)).orderBy(asc(galleries.sortOrder)).limit(1))[0]?.id ?? null;
@@ -114,8 +151,9 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
               return {
                 id,
                 eventId: ev.id,
-                galleryId,
+                galleryId: (f.galleryName && galleryByName.get(f.galleryName.toLowerCase())) || galleryId,
                 uploaderId: req.user!.id,
+                isHidden: !!body.asCover,
                 filename: f.filename,
                 contentType: f.contentType,
                 mediaType: mediaKindOf(f.contentType),
@@ -133,16 +171,20 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
     return { uploads, rejected };
   });
 
-  app.post('/photos/:id/upload-url', { preHandler: guard.perm('images:upload') }, async (req) => {
-    const { photo } = await loadPhoto(req, (req.params as { id: string }).id);
+  app.post('/photos/:id/upload-url', { preHandler: guard.user }, async (req) => {
+    const { photo } = await loadPhoto(req, (req.params as { id: string }).id, 'contribute');
+    ownUploadOnly(req, photo);
+    requireUploadRight(req, { cover: photo.isHidden });
     if (photo.status !== 'pending_upload' && photo.status !== 'failed') throw conflict('This photograph has already been uploaded');
     return { uploadUrl: await ctx.storage.presignUpload(photo.originalKey, photo.contentType) };
   });
 
-  app.post('/events/:id/uploads/complete', { preHandler: guard.perm('images:upload') }, async (req) => {
+  app.post('/events/:id/uploads/complete', { preHandler: guard.user }, async (req) => {
     const { photoIds } = parse(z.object({ photoIds: z.array(z.string().uuid()).min(1).max(MAX_BATCH) }), req.body);
-    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id);
-    const rows = await ctx.db.select().from(photos).where(and(eq(photos.eventId, ev.id), inArray(photos.id, photoIds)));
+    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id, 'contribute');
+    requireUploadRight(req, { cover: req.eventAccess === 'manage' });
+    const contributing = req.eventAccess === 'contribute';
+    const rows = await ctx.db.select().from(photos).where(and(eq(photos.eventId, ev.id), inArray(photos.id, photoIds), ...(contributing ? [eq(photos.uploaderId, req.user!.id)] : [])));
     const byId = new Map(rows.map((r) => [r.id, r]));
 
     const results = await Promise.all(
@@ -166,7 +208,8 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
   // ---------- retry ----------
 
   app.post('/photos/:id/retry', { preHandler: guard.perm('images:upload') }, async (req) => {
-    const { photo } = await loadPhoto(req, (req.params as { id: string }).id);
+    const { photo } = await loadPhoto(req, (req.params as { id: string }).id, 'contribute');
+    ownUploadOnly(req, photo);
     if (photo.status !== 'failed') throw conflict('Only failed photographs can be retried');
     // The original was retained, so reprocessing never needs another upload.
     await enqueuePhoto(ctx, photo.id);
@@ -174,8 +217,8 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post('/events/:id/photos/retry-failed', { preHandler: guard.perm('images:upload') }, async (req) => {
-    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id);
-    const failed = await ctx.db.select({ id: photos.id }).from(photos).where(and(eq(photos.eventId, ev.id), eq(photos.status, 'failed')));
+    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id, 'contribute');
+    const failed = await ctx.db.select({ id: photos.id }).from(photos).where(and(eq(photos.eventId, ev.id), eq(photos.status, 'failed'), ...(req.eventAccess === 'contribute' ? [eq(photos.uploaderId, req.user!.id)] : [])));
     for (const f of failed) await enqueuePhoto(ctx, f.id);
     return { retried: failed.length };
   });
@@ -194,7 +237,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
       }),
       req.query,
     );
-    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id);
+    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id, 'contribute');
     const { limit, offset, page, pageSize } = pageParams({ ...q, pageSize: q.pageSize ?? 60 });
     const conds: SQL[] = [eq(photos.eventId, ev.id)];
     if (q.status) conds.push(eq(photos.status, q.status));
@@ -210,7 +253,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get('/events/:id/upload-summary', { preHandler: guard.perm('events:view') }, async (req) => {
-    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id);
+    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id, 'contribute');
     const rows = await ctx.db.select({ status: photos.status, n: count() }).from(photos).where(eq(photos.eventId, ev.id)).groupBy(photos.status);
     const summary = { pending_upload: 0, uploaded: 0, processing: 0, ready: 0, failed: 0 };
     for (const r of rows) summary[r.status] = r.n;
@@ -240,7 +283,12 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
     if (touchesOrg && !req.perms!.has('galleries:manage')) throw forbidden('Missing permission: galleries:manage');
     if (!touchesMeta && !touchesOrg) throw badRequest('Nothing to update');
 
-    const { photo } = await loadPhoto(req, (req.params as { id: string }).id);
+    const { photo } = await loadPhoto(req, (req.params as { id: string }).id, 'contribute');
+    // Invited photographers may describe their own uploads; organising the event's media is for owners and editors.
+    if (req.eventAccess === 'contribute') {
+      ownUploadOnly(req, photo);
+      if (touchesOrg) throw forbidden('Only the event owner or an editor can organise the gallery');
+    }
     if (body.galleryId) {
       const [g] = await ctx.db.select({ id: galleries.id }).from(galleries).where(and(eq(galleries.id, body.galleryId), eq(galleries.eventId, photo.eventId)));
       if (!g) throw badRequest('Gallery does not belong to this event');
@@ -286,7 +334,8 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
   // ---------- original download for the owner / admin ----------
 
   app.get('/photos/:id/original', { preHandler: guard.perm('images:download') }, async (req) => {
-    const { photo } = await loadPhoto(req, (req.params as { id: string }).id);
+    const { photo } = await loadPhoto(req, (req.params as { id: string }).id, 'contribute');
+    ownUploadOnly(req, photo);
     if (photo.status === 'pending_upload') throw conflict('Not uploaded yet');
     return { url: await ctx.storage.presignDownload(photo.originalKey, { filename: downloadName(photo), inline: false }) };
   });
@@ -320,8 +369,9 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/events/:id/photos/delete', { preHandler: adminDelete }, async (req) => {
     const { photoIds } = parse(z.object({ photoIds: z.array(z.string().uuid()).min(1).max(500) }), req.body);
-    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id);
-    const rows = await ctx.db.select().from(photos).where(and(eq(photos.eventId, ev.id), inArray(photos.id, photoIds)));
+    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id, 'contribute');
+    const contributing = req.eventAccess === 'contribute';
+    const rows = await ctx.db.select().from(photos).where(and(eq(photos.eventId, ev.id), inArray(photos.id, photoIds), ...(contributing ? [eq(photos.uploaderId, req.user!.id)] : [])));
     await permanentlyDelete(req, rows);
     return { deleted: rows.length };
   });

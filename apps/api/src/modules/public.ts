@@ -18,6 +18,29 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
   const ctx = app.ctx;
   const mediaPath = (photoId: string, kind: string) => `/api/public/photos/${photoId}/${kind}`;
 
+  async function findCover(eventId: string, coverPhotoId: string | null) {
+    if (coverPhotoId) {
+      const [chosen] = await ctx.db.select({ id: photos.id, key: photos.previewKey }).from(photos).where(and(eq(photos.id, coverPhotoId), eq(photos.eventId, eventId), eq(photos.status, 'ready')));
+      if (chosen?.key) return chosen;
+    }
+    const [first] = await ctx.db
+      .select({ id: photos.id, key: photos.previewKey })
+      .from(photos)
+      .where(and(eq(photos.eventId, eventId), eq(photos.status, 'ready'), eq(photos.isHidden, false)))
+      .orderBy(asc(photos.sortOrder), asc(photos.takenAt), asc(photos.createdAt))
+      .limit(1);
+    return first?.key ? first : null;
+  }
+
+  /** The event's cover image: redirects to a short-lived link, after the same access checks as the gallery. */
+  app.get('/public/events/:slug/cover', async (req, reply) => {
+    const ev = await resolvePublicEvent(ctx, req, (req.params as { slug: string }).slug);
+    const cover = await findCover(ev.id, ev.coverPhotoId);
+    if (!cover?.key) throw new AppError(404, 'not_found', 'No cover image');
+    reply.header('cache-control', 'private, max-age=120');
+    return reply.redirect(await ctx.storage.presignDownload(cover.key, { ttlSeconds: 300 }), 302);
+  });
+
   app.get('/public/events/:slug', async (req) => {
     const slug = (req.params as { slug: string }).slug;
     // Private events reveal only their name until unlocked; everything else needs a grant.
@@ -30,11 +53,8 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
       .from(galleries)
       .where(and(eq(galleries.eventId, ev.id), eq(galleries.isVisible, true)))
       .orderBy(asc(galleries.sortOrder));
-    // Explicit cover if set and still visible, otherwise the first visible photograph.
-    const visible = and(eq(photos.eventId, ev.id), eq(photos.status, 'ready'), eq(photos.isHidden, false));
-    const [chosen] = ev.coverPhotoId ? await ctx.db.select({ id: photos.id }).from(photos).where(and(eq(photos.id, ev.coverPhotoId), visible)) : [];
-    const [first] = chosen ? [] : await ctx.db.select({ id: photos.id }).from(photos).where(visible).orderBy(asc(photos.sortOrder), asc(photos.takenAt), asc(photos.createdAt)).limit(1);
-    const cover = chosen ?? first;
+    // The chosen cover (it may be a hidden, cover-only image), otherwise the first visible photograph.
+    const hasCover = !!(await findCover(ev.id, ev.coverPhotoId));
     return {
       event: {
         name: ev.name,
@@ -44,7 +64,7 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
         location: ev.location,
         expiresAt: ev.expiresAt,
         downloadPolicy: ev.downloadPolicy,
-        coverUrl: cover ? mediaPath(cover.id, 'preview') : null,
+        coverUrl: hasCover ? `/api/public/events/${ev.slug}/cover` : null,
         galleries: gals.filter((x) => x.n > 0).map((x) => ({ id: x.g.id, name: x.g.name, description: x.g.description, photoCount: x.n })),
       },
     };

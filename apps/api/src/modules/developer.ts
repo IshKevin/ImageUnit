@@ -77,7 +77,7 @@ export const developerRoutes: FastifyPluginAsync = async (app) => {
     try {
       const visible = await views.loadEvent(client, ev.id);
       const body =
-        q.resource === 'event' ? { event: views.eventJson(visible) }
+        q.resource === 'event' ? { event: await views.eventJson(visible, client) }
         : q.resource === 'galleries' ? await views.galleriesOf(visible)
         : await views.photosOf(client, visible, { galleryId: q.galleryId, page: q.page, pageSize: q.pageSize ?? 25 });
       return { request, status: 200, body };

@@ -11,7 +11,7 @@ export const statsRoutes: FastifyPluginAsync = async (app) => {
   app.get('/stats/me', { preHandler: guard.perm('stats:view') }, async (req) => {
     const uid = req.user!.id;
     const [[ev], [ph], [an]] = await Promise.all([
-      ctx.db.select({ n: count() }).from(events).where(eq(events.ownerId, uid)),
+      ctx.db.select({ n: count() }).from(events).where(sql`(${events.ownerId} = ${uid} or exists (select 1 from event_members m where m.event_id = ${events.id} and m.user_id = ${uid}))`),
       ctx.db
         .select({
           n: count(),
@@ -20,8 +20,7 @@ export const statsRoutes: FastifyPluginAsync = async (app) => {
           processing: sql<number>`count(*) filter (where ${photos.status} in ('uploaded','processing'))::int`,
         })
         .from(photos)
-        .innerJoin(events, eq(events.id, photos.eventId))
-        .where(eq(events.ownerId, uid)),
+        .where(eq(photos.uploaderId, uid)),
       ctx.db
         .select({
           views: sql<number>`count(*) filter (where ${analyticsEvents.type} = 'event_view')::int`,

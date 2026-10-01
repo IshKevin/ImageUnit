@@ -29,7 +29,8 @@ export const sortSchema = z.enum(['newest', 'oldest', 'name', 'taken']).default(
 /** Media a user may work with: everything for admins and editors, only their own events' media for photographers. */
 export function libraryConds(user: Pick<User, 'id' | 'role'>, f: LibraryFilter): SQL[] {
   const c: SQL[] = [];
-  if (!seesAllEvents(user)) c.push(eq(events.ownerId, user.id));
+  // Photographers work with their own events and with whatever they uploaded to events they were invited to.
+  if (!seesAllEvents(user)) c.push(sql`(${events.ownerId} = ${user.id} or ${photos.uploaderId} = ${user.id})`);
   if (f.eventId) c.push(eq(photos.eventId, f.eventId));
   if (f.galleryId) c.push(eq(photos.galleryId, f.galleryId));
   if (f.type) c.push(eq(photos.mediaType, f.type));

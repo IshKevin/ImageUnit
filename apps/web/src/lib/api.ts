@@ -76,6 +76,11 @@ export interface EventItem {
   coverPhotoId: string | null;
   shareUrl: string;
   isPubliclyAvailable: boolean;
+  /** 'manage' = owner/editor/admin; 'contribute' = a photographer invited to this event. */
+  myAccess?: 'manage' | 'contribute';
+  memberCount?: number;
+  /** Short-lived link to the cover (chosen photo, or the first photograph when none is chosen). */
+  coverUrl?: string | null;
   photoCount?: number;
   readyCount?: number;
   storageBytes?: number;
@@ -96,6 +101,7 @@ export type PhotoStatus = 'pending_upload' | 'uploaded' | 'processing' | 'ready'
 export type MediaType = 'image' | 'video';
 export interface Photo {
   id: string;
+  uploaderId: string;
   mediaType: MediaType;
   galleryId: string | null;
   filename: string;
@@ -171,4 +177,17 @@ export interface Collection {
   itemCount?: number;
   coverUrl?: string | null;
   apiUrl?: string;
+}
+
+export interface EventMember {
+  userId: string;
+  name: string;
+  email: string;
+  status: string;
+  invitedAt: string;
+}
+export interface MemberCandidate {
+  id: string;
+  name: string;
+  email: string;
 }

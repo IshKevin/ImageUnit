@@ -3,7 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import QRCode from 'qrcode';
 import { z } from 'zod';
 import { q as col } from '../lib/sql.js';
-import { analyticsEvents, events, galleries, photos, users, type Event } from '../db/schema.js';
+import { analyticsEvents, eventMembers, events, galleries, photos, users, type Event } from '../db/schema.js';
 import { loadManagedEvent, makeGuards } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
@@ -35,6 +35,15 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
   const ctx = app.ctx;
   const guard = makeGuards(ctx);
   const dto = (e: Event, extra?: Record<string, unknown>) => eventDto(e, ctx.config.PUBLIC_WEB_URL, extra);
+
+  /** Cover image: the chosen photo (even a hidden, cover-only one), otherwise the first visible photo. */
+  async function coverUrl(eventId: string, coverPhotoId: string | null, size: 'thumb' | 'preview') {
+    const keyCol = size === 'thumb' ? photos.thumbKey : photos.previewKey;
+    let key: string | null | undefined;
+    if (coverPhotoId) key = (await ctx.db.select({ key: keyCol }).from(photos).where(and(eq(photos.id, coverPhotoId), eq(photos.eventId, eventId), eq(photos.status, 'ready'))))[0]?.key;
+    if (!key) key = (await ctx.db.select({ key: keyCol }).from(photos).where(and(eq(photos.eventId, eventId), eq(photos.status, 'ready'), eq(photos.isHidden, false))).orderBy(photos.sortOrder, photos.takenAt, photos.createdAt).limit(1))[0]?.key;
+    return key ? ctx.storage.presignDownload(key, { ttlSeconds: 900 }) : null;
+  }
 
   async function uniqueSlug(name: string) {
     const base = slugify(name);
@@ -78,7 +87,8 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
     const u = req.user!;
     const { limit, offset, page, pageSize } = pageParams(q);
     const conds: SQL[] = [];
-    if (!seesAllEvents(u)) conds.push(eq(events.ownerId, u.id));
+    // Photographers see events they own plus events they were invited to contribute to.
+    if (!seesAllEvents(u)) conds.push(or(eq(events.ownerId, u.id), sql`exists (select 1 from ${eventMembers} m where m.event_id = ${col(events.id)} and m.user_id = ${u.id})`)!);
     else if (q.ownerId) conds.push(eq(events.ownerId, q.ownerId));
     if (q.status) conds.push(eq(events.status, q.status));
     if (q.q) conds.push(or(ilike(events.name, `%${q.q}%`), ilike(events.location, `%${q.q}%`))!);
@@ -92,6 +102,9 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
           photoCount: sql<number>`(select count(*) from ${photos} where ${photos.eventId} = ${col(events.id)})::int`,
           readyCount: sql<number>`(select count(*) from ${photos} where ${photos.eventId} = ${col(events.id)} and ${photos.status} = 'ready')::int`,
           storageBytes: sql<number>`(select coalesce(sum(size_bytes + preview_size_bytes + thumb_size_bytes), 0) from ${photos} where ${photos.eventId} = ${col(events.id)})::float8`,
+          memberCount: sql<number>`(select count(*) from ${eventMembers} m where m.event_id = ${col(events.id)})::int`,
+          sharedWithMe: sql<boolean>`${events.ownerId} <> ${u.id}`,
+          coverThumbKey: sql<string | null>`(select p.thumb_key from ${photos} p where p.id = coalesce(${events.coverPhotoId}, (select p2.id from ${photos} p2 where p2.event_id = ${col(events.id)} and p2.status = 'ready' and p2.is_hidden = false order by p2.sort_order, p2.taken_at, p2.created_at limit 1)))`,
         })
         .from(events)
         .innerJoin(users, eq(users.id, events.ownerId))
@@ -102,7 +115,20 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
       ctx.db.select({ total: count() }).from(events).where(where),
     ]);
     return {
-      items: rows.map((r) => dto(r.event, { ownerName: r.ownerName, photoCount: r.photoCount, readyCount: r.readyCount, storageBytes: r.storageBytes })),
+      items: await Promise.all(
+        rows.map(async (r) =>
+          dto(r.event, {
+            ownerName: r.ownerName,
+            photoCount: r.photoCount,
+            readyCount: r.readyCount,
+            storageBytes: r.storageBytes,
+            memberCount: r.memberCount,
+            // Owners/editors/admins manage; everyone else listed here was invited.
+            myAccess: seesAllEvents(u) || !r.sharedWithMe ? 'manage' : 'contribute',
+            coverUrl: r.coverThumbKey ? await ctx.storage.presignDownload(r.coverThumbKey, { ttlSeconds: 900 }) : null,
+          }),
+        ),
+      ),
       total,
       page,
       pageSize,
@@ -162,8 +188,9 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
   // ---------- read / update ----------
 
   app.get('/events/:id', { preHandler: guard.perm('events:view') }, async (req) => {
-    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id);
-    return { event: dto(ev) };
+    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id, 'contribute');
+    const [{ n } = { n: 0 }] = await ctx.db.select({ n: count() }).from(eventMembers).where(eq(eventMembers.eventId, ev.id));
+    return { event: dto(ev, { myAccess: req.eventAccess, memberCount: n, coverUrl: await coverUrl(ev.id, ev.coverPhotoId, 'preview') }) };
   });
 
   app.patch('/events/:id', { preHandler: guard.perm('events:edit') }, async (req) => {

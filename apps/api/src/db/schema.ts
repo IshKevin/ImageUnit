@@ -123,6 +123,22 @@ export const events = pgTable(
   ],
 );
 
+/** Photographers invited to contribute to an event they do not own (the owner is typically an editor). */
+export const eventMembers = pgTable(
+  'event_members',
+  {
+    eventId: uuid('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    invitedBy: uuid('invited_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.eventId, t.userId] }), index('event_members_user_idx').on(t.userId)],
+);
+
 export const galleries = pgTable(
   'galleries',
   {

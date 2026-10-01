@@ -48,11 +48,13 @@ export const PHOTOGRAPHER_DEFAULTS: readonly Permission[] = [
 ];
 
 /**
- * Editors curate: they see every event, rename events and media, edit descriptions and tags, organise galleries and
- * manage collections. They cannot upload, publish, delete, or touch users, websites or settings.
+ * Editors curate: they see every event, create events and invite photographers to them, rename events and media, edit
+ * descriptions and tags, organise galleries and manage collections. They cannot upload, publish, delete, or touch users,
+ * websites or settings.
  */
 export const EDITOR_DEFAULTS: readonly Permission[] = [
   'events:view',
+  'events:create',
   'events:edit',
   'galleries:manage',
   'media:edit',
