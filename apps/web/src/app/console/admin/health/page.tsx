@@ -14,6 +14,7 @@ interface Health {
   queues: Record<string, Record<string, number> | null>;
   photos: { failed: number; stuck: number; abandonedUploads: number };
   security: { lockedAccounts: number; lockoutsLast24h: number };
+  publicStorage?: { url: string; host: string; reachable: boolean; corsOk: boolean; ok: boolean; problems: string[]; note?: string };
 }
 
 function Indicator({ ok, name, detail }: { ok: boolean; name: string; detail?: string }) {
@@ -53,6 +54,24 @@ function HealthView() {
               {Object.entries(h.checks).map(([k, ok]) => <Indicator key={k} ok={ok} name={label(k)} detail={ok ? 'Reachable' : 'Unreachable'} />)}
             </div>
           </Card>
+
+          {h.publicStorage && (
+            <Card>
+              <CardHeader title="Photo and video uploads" description={`Browsers upload straight to ${h.publicStorage.host || 'the storage address'}`} />
+              <div className="space-y-3 p-5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Indicator ok={h.publicStorage.reachable} name="Storage address reachable" detail={h.publicStorage.reachable ? h.publicStorage.url : 'Not reachable'} />
+                  <Indicator ok={h.publicStorage.corsOk} name="Browsers allowed (CORS)" detail={h.publicStorage.corsOk ? 'Uploads from the website are accepted' : 'Browsers would be blocked'} />
+                </div>
+                {h.publicStorage.note && <p className="text-sm text-muted">{h.publicStorage.note}</p>}
+                {h.publicStorage.problems.length > 0 && (
+                  <ul className="list-disc space-y-1 pl-5 text-sm text-warning" aria-label="Upload problems">
+                    {h.publicStorage.problems.map((p) => <li key={p}>{p}</li>)}
+                  </ul>
+                )}
+              </div>
+            </Card>
+          )}
 
           <Card>
             <CardHeader title="Queues" />

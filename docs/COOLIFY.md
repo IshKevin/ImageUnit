@@ -134,3 +134,13 @@ When a signed-in browser sends a request that changes data, the server checks th
 A rejection reads "Cross-origin request rejected: this request came from X but was sent to Y"; X is the page that made the request.
 
 `PUBLIC_WEB_URL` should still be set to your real address (`https://gallery.afs-rwanda.org`): it is used for the share links, QR codes and links in emails and API responses.
+
+## "Network error" when uploading photos
+
+Photos and videos are uploaded **directly from the browser to the storage service** (the `s3` service), so that service needs its own public domain, and the browser must be able to talk to it. Open **Console → System health → Photo and video uploads**: it tests this the way a browser would and says what is wrong. The usual causes:
+
+1. **The `s3` service has no domain.** In Coolify give it one with the container port, e.g. `https://media.afs-rwanda.org:8333` (DNS pointing at the server), and redeploy.
+2. **`S3_PUBLIC_ENDPOINT` does not match that domain.** It must be exactly `https://media.afs-rwanda.org` (https, no port, no path). If it says `localhost`, `s3` or `http://…` on an https site, uploads fail ("mixed content" is blocked by browsers).
+3. **CORS.** The storage service accepts browsers from any site by default (the upload links are signed and short-lived). If you restricted it with `S3_CORS_ORIGINS` or `CORS_ORIGINS`, include your site's address, then redeploy the `s3` service.
+
+After any change, redeploy and retry; failed files in the upload list have a **Retry failed** button, so nothing is re-picked.

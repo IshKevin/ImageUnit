@@ -135,6 +135,45 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
 
   // ---------- operational health ----------
 
+  /**
+   * Browsers upload straight to object storage at S3_PUBLIC_ENDPOINT, so that address must be reachable from them and
+   * must answer CORS preflights. Probe it the way a browser would and explain what is wrong, in plain words.
+   */
+  async function probePublicStorage() {
+    const url = ctx.config.S3_PUBLIC_ENDPOINT ?? ctx.config.S3_ENDPOINT ?? '';
+    const webOrigin = new URL(ctx.config.PUBLIC_WEB_URL).origin;
+    const problems: string[] = [];
+    let reachable = false;
+    let corsOk = false;
+    let host = '';
+    let note: string | undefined;
+    try {
+      const u = new URL(url);
+      host = u.host;
+      const loopback = /^(localhost|127\.|0\.0\.0\.0|\[::1\])/i.test(u.hostname) || /^(s3|minio)$/i.test(u.hostname);
+      if (webOrigin.startsWith('https://') && u.protocol === 'http:') problems.push('The site uses https but the storage address is http: browsers block this ("mixed content"). Use an https address for S3_PUBLIC_ENDPOINT.');
+      if (loopback) {
+        // Not testable from the server: "localhost" here is the server itself, not the visitor's computer.
+        if (ctx.config.NODE_ENV === 'production') problems.push(`S3_PUBLIC_ENDPOINT (${url}) is an internal address that visitors' browsers cannot reach. Set it to the public domain you gave the storage service.`);
+        else note = 'Local address: it works for browsers on this computer and cannot be tested from the server.';
+        reachable = !problems.length;
+        corsOk = !problems.length;
+      } else {
+        const res = await fetch(`${url.replace(/\/$/, '')}/${ctx.config.S3_BUCKET}/connectivity-check`, {
+          method: 'OPTIONS',
+          headers: { origin: webOrigin, 'access-control-request-method': 'PUT', 'access-control-request-headers': 'content-type' },
+          signal: AbortSignal.timeout(5000),
+        });
+        reachable = true;
+        corsOk = !!res.headers.get('access-control-allow-origin');
+        if (!corsOk) problems.push(`The storage service answered but does not allow browsers from ${webOrigin} (CORS). Set S3_CORS_ORIGINS=* (or CORS_ORIGINS) and redeploy the storage service.`);
+      }
+    } catch (err) {
+      problems.push(`The server could not reach the storage address ${url || '(not set)'} (${(err as Error).message}). Check that the storage service has a public domain with container port 8333 and that S3_PUBLIC_ENDPOINT matches it exactly. If both are right, some hosts cannot reach their own public address from inside the server; test an upload from a browser.`);
+    }
+    return { url, host, reachable, corsOk, ok: reachable && corsOk && problems.length === 0, problems, note };
+  }
+
   app.get('/admin/health', { preHandler: guard.admin }, async () => {
     const started = Date.now();
     const [dbOk, storageOk, redisOk] = await Promise.all([
@@ -142,6 +181,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       ctx.storage.ping(),
       ctx.redis ? ctx.redis.ping().then(() => true, () => false) : Promise.resolve(false),
     ]);
+    const publicStorage = await probePublicStorage();
     const [photoQueue, videoQueue, maintenance] = await Promise.all([ctx.queues.photos.getJobCounts(), ctx.queues.videos.getJobCounts(), ctx.queues.maintenance.getJobCounts()]).catch(() => [null, null, null]);
     const [row] = await ctx.db
       .select({
@@ -155,6 +195,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     return {
       status: dbOk && storageOk && redisOk ? 'ok' : 'degraded',
       checks: { database: dbOk, storage: storageOk, redis: redisOk },
+      publicStorage,
       latencyMs: Date.now() - started,
       queues: { [QUEUES.photos]: photoQueue, [QUEUES.videos]: videoQueue, [QUEUES.maintenance]: maintenance },
       photos: { failed: row?.failed ?? 0, stuck: row?.stuck ?? 0, abandonedUploads: row?.abandoned ?? 0 },

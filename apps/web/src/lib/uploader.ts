@@ -71,7 +71,15 @@ function putFile(url: string, file: File, contentType: string, onProgress: (p: n
     xhr.setRequestHeader('content-type', contentType);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Storage rejected the upload (${xhr.status})`)));
-    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.onerror = () => {
+      let host = 'the storage server';
+      try {
+        host = new URL(url).host;
+      } catch {
+        /* keep the generic wording */
+      }
+      reject(new Error(`Could not reach the file storage (${host}). Check your connection. If it persists, ask an administrator to check the storage address and CORS settings.`));
+    };
     xhr.onabort = () => reject(new Error('Cancelled'));
     xhr.send(file);
   });

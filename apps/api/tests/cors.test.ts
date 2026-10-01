@@ -107,3 +107,35 @@ describe('same-origin protection for cookie sessions', () => {
     });
   });
 });
+
+describe('upload diagnostics on the health endpoint', () => {
+  const apps: TestApp[] = [];
+  afterAll(async () => {
+    for (const a of apps) await a.close();
+  });
+  const health = async (overrides: Record<string, string>) => {
+    const t = await createTestApp(overrides);
+    apps.push(t);
+    const admin = await session(t, 'admin');
+    return (await admin.get('/api/admin/health')).json().publicStorage as { ok: boolean; problems: string[]; note?: string };
+  };
+
+  it('does not cry wolf about a local address in development', async () => {
+    const r = await health({ S3_PUBLIC_ENDPOINT: 'http://localhost:8333', PUBLIC_WEB_URL: 'http://localhost:4001' });
+    expect(r).toMatchObject({ ok: true, problems: [] });
+    expect(r.note).toContain('Local address');
+  });
+
+  it('flags mixed content and an unreachable address in plain words', async () => {
+    const mixed = await health({ S3_PUBLIC_ENDPOINT: 'http://media.invalid.example', PUBLIC_WEB_URL: 'https://gallery.afs-rwanda.org' });
+    expect(mixed.ok).toBe(false);
+    expect(mixed.problems.join(' ')).toContain('mixed content');
+    expect(mixed.problems.join(' ')).toContain('could not reach the storage address');
+  });
+
+  it('flags an internal address in production', async () => {
+    const r = await health({ NODE_ENV: 'production', COOKIE_SECURE: 'true', S3_PUBLIC_ENDPOINT: 'http://localhost:8333', PUBLIC_WEB_URL: 'https://gallery.afs-rwanda.org' });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join(' ')).toContain('internal address');
+  });
+});

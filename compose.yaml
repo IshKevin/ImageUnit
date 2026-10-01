@@ -120,8 +120,10 @@ services:
       - -ip.bind=0.0.0.0
       - -s3
       - -s3.port=8333
-      # Browser CORS for the storage gateway: our web app by default; CORS_ORIGINS=* (or a list) opens it to other sites.
-      - -s3.allowedOrigins=${CORS_ORIGINS:-${PUBLIC_WEB_URL:-http://localhost:4001}}
+      # Browser CORS for the storage gateway. Every upload/download URL is already signed and short-lived, so access is
+      # controlled by the signature, not by the page's origin; a CORS list tied to PUBLIC_WEB_URL only caused
+      # "network error" uploads whenever that setting was off. Default: any site. Restrict with S3_CORS_ORIGINS.
+      - -s3.allowedOrigins=${S3_CORS_ORIGINS:-${CORS_ORIGINS:-*}}
       - -master.volumeSizeLimitMB=1024
     volumes: [s3data:/data]
     # Any HTTP answer (even 403 for an unsigned request) means the S3 gateway is listening.
