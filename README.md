@@ -30,7 +30,7 @@ npm run dev:web           # http://localhost:4001
 ```
 
 ## Tests
-`npm run test:e2e` drives a real Chromium browser through every role's workflow (43 scenarios: administrator, photographer, editor, mobile attendee, private gallery, video upload and playback, library, collections, website client, and the security boundaries between them). It needs the whole stack running (infra, API, worker, `next start`) and the admin credentials from `.env`.
+`npm run test:e2e` drives a real Chromium browser through every role's workflow (52 scenarios: administrator, photographer, editor, invited photographers, folder uploads, covers, mobile attendee, private gallery, video upload and playback, library, collections, website client, and the security boundaries between them). It needs the whole stack running (infra, API, worker, `next start`) and the admin credentials from `.env`.
 
 `npm test` runs the API integration suite against a real Postgres (`imageunit_test`, created automatically) with an in-memory storage double. It covers the Definition-of-Done security and reliability scenarios: cross-photographer isolation, admin-only deletion, suspension, website revocation, private galleries, expiry-without-data-loss, failed-upload retry, audit immutability.
 

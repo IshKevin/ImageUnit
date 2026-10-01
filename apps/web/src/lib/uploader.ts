@@ -7,6 +7,12 @@ export type UploadStatus = 'queued' | 'uploading' | 'finalizing' | 'done' | 'fai
 export interface UploadItem {
   id: string;
   file: File;
+  /** Effective MIME type (inferred from the extension when the browser gives none). */
+  contentType: string;
+  /** Relative path inside a dropped/selected folder, when applicable. */
+  path?: string;
+  /** Gallery the server should create/use for this file. */
+  galleryName?: string;
   status: UploadStatus;
   progress: number;
   error?: string;
@@ -20,10 +26,26 @@ export const ACCEPT_ATTR = [...IMAGE_TYPES, ...VIDEO_TYPES].join(',');
 const ACCEPTED = [...IMAGE_TYPES, ...VIDEO_TYPES];
 export const MAX_IMAGE_BYTES = 100 * 1024 * 1024;
 export const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
-export const isVideoFile = (f: { type: string }) => VIDEO_TYPES.includes(f.type);
+
+const EXT_TYPES: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', tif: 'image/tiff', tiff: 'image/tiff', avif: 'image/avif',
+  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska',
+};
+/** MIME type for a file name based on its extension, or '' when it is not an accepted media type. */
+export function mimeFromName(name: string): string {
+  const dot = name.lastIndexOf('.');
+  return dot < 0 ? '' : (EXT_TYPES[name.slice(dot + 1).toLowerCase()] ?? '');
+}
+/** The browser-reported type when it is an accepted one, otherwise inferred from the extension. */
+export function mimeOf(file: File): string {
+  if (ACCEPTED.includes(file.type)) return file.type;
+  return mimeFromName(file.name) || file.type;
+}
+export const isVideoFile = (f: File) => VIDEO_TYPES.includes(mimeOf(f));
 
 function validate(file: File): string | undefined {
-  if (!ACCEPTED.includes(file.type)) return `Unsupported type ${file.type || 'unknown'}`;
+  const type = mimeOf(file);
+  if (!ACCEPTED.includes(type)) return `Unsupported type ${type || 'unknown'}`;
   if (file.size === 0) return 'File is empty';
   if (isVideoFile(file) && file.size > MAX_VIDEO_BYTES) return 'Video is larger than the 2 GB limit';
   if (!isVideoFile(file) && file.size > MAX_IMAGE_BYTES) return 'Photo is larger than the 100 MB limit';
@@ -41,12 +63,12 @@ interface CompleteResponse {
   results: { photoId: string; ok: boolean; error?: string }[];
 }
 
-function putFile(url: string, file: File, onProgress: (p: number) => void, register: (x: XMLHttpRequest) => void): Promise<void> {
+function putFile(url: string, file: File, contentType: string, onProgress: (p: number) => void, register: (x: XMLHttpRequest) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     register(xhr);
     xhr.open('PUT', url);
-    xhr.setRequestHeader('content-type', file.type);
+    xhr.setRequestHeader('content-type', contentType);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Storage rejected the upload (${xhr.status})`)));
     xhr.onerror = () => reject(new Error('Network error during upload'));
@@ -75,13 +97,14 @@ export function useUploader(eventId: string, galleryId: string | undefined, onSe
     sync(itemsRef.current.map((i) => (i.id === id ? { ...i, ...p } : i)));
   }, []);
 
-  const addFiles = useCallback((files: File[]) => {
-    const fresh: UploadItem[] = files.map((file) => {
+  const addEntries = useCallback((entries: { file: File; path?: string; galleryName?: string }[]) => {
+    const fresh: UploadItem[] = entries.map(({ file, path, galleryName }) => {
       const error = validate(file);
-      return { id: `u${idSeq.current++}`, file, status: error ? 'failed' : 'queued', progress: 0, error } as UploadItem;
+      return { id: `u${idSeq.current++}`, file, contentType: mimeOf(file), path, galleryName, status: error ? 'failed' : 'queued', progress: 0, error } as UploadItem;
     });
     sync([...itemsRef.current, ...fresh]);
   }, []);
+  const addFiles = useCallback((files: File[]) => addEntries(files.map((file) => ({ file }))), [addEntries]);
 
   const finalize = useCallback(
     async (batch: UploadItem[]) => {
@@ -112,7 +135,7 @@ export function useUploader(eventId: string, galleryId: string | undefined, onSe
         try {
           const res = await post<InitResponse>(`/events/${eventId}/uploads`, {
             galleryId,
-            files: chunk.map((c) => ({ filename: c.file.name, contentType: c.file.type, sizeBytes: c.file.size })),
+            files: chunk.map((c) => ({ filename: c.file.name, contentType: c.contentType, sizeBytes: c.file.size, ...(c.galleryName && { galleryName: c.galleryName }) })),
           });
           const rejected = new Map(res.rejected.map((r) => [r.filename, r.reason]));
           const accepted = [...res.uploads];
@@ -138,7 +161,7 @@ export function useUploader(eventId: string, galleryId: string | undefined, onSe
           if (!item) return;
           patch(item.id, { status: 'uploading', progress: 0, error: undefined });
           try {
-            await putFile(item.uploadUrl!, item.file, (p) => patch(item.id, { progress: p }), (x) => xhrs.current.add(x));
+            await putFile(item.uploadUrl!, item.file, item.contentType, (p) => patch(item.id, { progress: p }), (x) => xhrs.current.add(x));
             patch(item.id, { status: 'finalizing', progress: 1 });
             pending.push(item);
             if (pending.length >= COMPLETE_BATCH) await finalize(pending.splice(0));
@@ -191,5 +214,5 @@ export function useUploader(eventId: string, galleryId: string | undefined, onSe
 
   const count = (s: UploadStatus) => items.filter((i) => i.status === s).length;
   const inFlight = items.some((i) => i.status === 'queued' || i.status === 'uploading' || i.status === 'finalizing');
-  return { items, addFiles, start: run, retryFailed, cancel, clearDone, inFlight, counts: { total: items.length, done: count('done'), failed: count('failed'), remaining: items.length - count('done') - count('failed') } };
+  return { items, addFiles, addEntries, start: run, retryFailed, cancel, clearDone, inFlight, counts: { total: items.length, done: count('done'), failed: count('failed'), remaining: items.length - count('done') - count('failed') } };
 }

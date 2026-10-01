@@ -9,6 +9,7 @@ import { del, patch, post, type DownloadPolicy, type EventItem } from '@/lib/api
 import { date, toLocalInput } from '@/lib/format';
 import { useMe } from '@/lib/auth';
 import { useRouter } from 'next/navigation';
+import { CoverCard } from './cover-card';
 
 export function SettingsTab({ event }: { event: EventItem }) {
   const { data: user } = useMe();
@@ -104,6 +105,8 @@ export function SettingsTab({ event }: { event: EventItem }) {
       </div>
 
       <div className="space-y-6">
+        <CoverCard event={event} />
+
         <Card>
           <CardHeader title="Publishing" />
           <div className="space-y-3 p-5 text-sm">

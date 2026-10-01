@@ -61,7 +61,7 @@ export async function createEventViaUi(page: Page, name: string, opts: { visibil
 }
 
 export async function uploadPhotos(page: Page, files: { name: string; mimeType: string; buffer: Buffer }[]) {
-  await page.locator('input[type=file]').setInputFiles(files);
+  await page.locator('input[type=file]:not([webkitdirectory])').setInputFiles(files);
   await expect(page.getByText(new RegExp(`Completed ${files.length}`))).toBeVisible();
   await expect(page.getByText(`${files.length} ready`)).toBeVisible({ timeout: 60_000 });
 }

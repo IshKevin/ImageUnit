@@ -63,7 +63,7 @@ test.describe('Photographer', () => {
   });
 
   test('rejects unsupported files per file without blocking the batch', async () => {
-    await annaS.page.locator('input[type=file]').setInputFiles([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') }, await image('IMG_005.jpg', [10, 10, 10])]);
+    await annaS.page.locator('input[type=file]:not([webkitdirectory])').setInputFiles([{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') }, await image('IMG_005.jpg', [10, 10, 10])]);
     await expect(annaS.page.getByText('Unsupported type text/plain')).toBeVisible();
     await expect(annaS.page.getByText('5 ready')).toBeVisible({ timeout: 60_000 });
   });

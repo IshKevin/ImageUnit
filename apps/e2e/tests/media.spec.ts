@@ -121,7 +121,7 @@ test.describe('Editor', () => {
     await expect(eddie.page.getByRole('link', { name: 'Audit log' })).toHaveCount(0);
     await eddie.page.goto('/console/events');
     await expect(eddie.page.getByText(eventName)).toBeVisible(); // someone else's event
-    await expect(eddie.page.getByRole('button', { name: /New event/ })).toHaveCount(0);
+    await expect(eddie.page.getByRole('button', { name: /New event/ }).first()).toBeVisible(); // editors can create events (and invite photographers)
   });
 
   test('renames the event and edits a photo, but cannot upload, publish or touch access settings', async () => {

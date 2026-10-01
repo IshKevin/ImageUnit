@@ -58,11 +58,17 @@ export function GalleryClient({ slug, event }: { slug: string; event: PublicEven
 
   return (
     <div className="min-h-screen">
-      <header className="relative isolate overflow-hidden border-b border-border">
-        {event.coverUrl && <img src={event.coverUrl} alt="" aria-hidden className="absolute inset-0 -z-10 size-full scale-110 object-cover opacity-25 blur-2xl" />}
-        <div className="mx-auto max-w-7xl px-4 py-10 sm:py-14">
+      <header className={clsx('relative isolate overflow-hidden border-b border-border', event.coverUrl && 'flex min-h-[30vh] items-end bg-black text-white md:min-h-[40vh]')}>
+        {event.coverUrl && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={event.coverUrl} alt="" fetchPriority="high" loading="eager" decoding="async" className="absolute inset-0 -z-20 size-full object-cover" />
+            <div aria-hidden className="absolute inset-0 -z-10 bg-gradient-to-t from-black/80 via-black/35 to-black/10" />
+          </>
+        )}
+        <div className={clsx('mx-auto w-full max-w-7xl px-4', event.coverUrl ? 'py-6 sm:py-10' : 'py-10 sm:py-14')}>
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">{event.name}</h1>
-          <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-muted">
+          <div className={clsx('mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm', event.coverUrl ? 'text-white/85' : 'text-muted')}>
             {event.eventDate && <span className="inline-flex items-center gap-1.5"><CalendarDays className="size-4" />{date(event.eventDate)}</span>}
             {event.location && <span className="inline-flex items-center gap-1.5"><MapPin className="size-4" />{event.location}</span>}
             <span>{total.toLocaleString()} {total === 1 ? 'item' : 'items'}</span>
@@ -70,7 +76,7 @@ export function GalleryClient({ slug, event }: { slug: string; event: PublicEven
           {event.description && <p className="mt-4 max-w-2xl text-sm leading-relaxed">{event.description}</p>}
           <div className="mt-5 flex flex-wrap items-center gap-2">
             <Button onClick={share}><Share2 className="size-4" /> Share</Button>
-            {event.expiresAt && <span className="text-xs text-muted">Available until {date(event.expiresAt)}</span>}
+            {event.expiresAt && <span className={clsx('text-xs', event.coverUrl ? 'text-white/80' : 'text-muted')}>Available until {date(event.expiresAt)}</span>}
           </div>
         </div>
       </header>
