@@ -1,4 +1,7 @@
 import { and, asc, count, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
+import { collectionItems, collections, users } from '../db/schema.js';
+import { hasTag, publiclyVisibleMedia, textSearch } from './media-query.js';
+import { downloadName } from './media.js';
 import type { AppContext } from '../context.js';
 import { events, galleries, photos, type ApiClient, type Event } from '../db/schema.js';
 import { isUuid } from '../http/guards.js';
@@ -75,30 +78,85 @@ export function createWebsiteViews(ctx: AppContext) {
     return { items: rows.map(({ g, n }) => ({ id: g.id, name: g.name, description: g.description, photoCount: n })) };
   }
 
-  async function photosOf(client: ApiClient, ev: Event, query: { galleryId?: string; page?: number; pageSize?: number }) {
-    const { limit, offset, page, pageSize } = pageParams(query);
-    const conds: SQL[] = [eq(photos.eventId, ev.id), eq(photos.status, 'ready'), eq(photos.isHidden, false), sql`(${photos.galleryId} is null or ${galleries.isVisible})`];
-    if (query.galleryId) conds.push(eq(photos.galleryId, query.galleryId));
+  const eventContext = (e: Event) => ({
+    id: e.id,
+    slug: e.slug,
+    name: e.name,
+    description: e.description,
+    date: e.eventDate,
+    location: e.location,
+    publicUrl: `${ctx.config.PUBLIC_WEB_URL}/e/${e.slug}`,
+  });
+
+  interface MediaFilters {
+    eventId?: string;
+    galleryId?: string;
+    collectionId?: string;
+    id?: string;
+    type?: 'image' | 'video';
+    q?: string;
+    tag?: string;
+    page?: number;
+    pageSize?: number;
+  }
+
+  /**
+   * The single place that turns rows into what a website receives, so event pages, search, single lookups and
+   * collections can never disagree. Every item carries its event's name, description, date and location.
+   */
+  async function mediaOf(client: ApiClient, f: MediaFilters = {}) {
+    const { limit, offset, page, pageSize } = pageParams(f);
+    const conds: SQL[] = [...publiclyVisibleMedia(sql`${galleries.isVisible}`)];
+    if (client.allowedEventIds?.length) conds.push(inArray(events.id, client.allowedEventIds));
+    if (f.eventId) conds.push(eq(events.id, f.eventId));
+    if (f.id) conds.push(eq(photos.id, f.id));
+    if (f.galleryId) conds.push(eq(photos.galleryId, f.galleryId));
+    if (f.type) conds.push(eq(photos.mediaType, f.type));
+    if (f.tag) conds.push(hasTag(f.tag));
+    const text = f.q ? textSearch(f.q, { withEvent: true }) : undefined;
+    if (text) conds.push(text);
+    if (f.collectionId) conds.push(sql`exists (select 1 from ${collectionItems} ci where ci.photo_id = ${photos.id} and ci.collection_id = ${f.collectionId})`);
     const where = and(...conds);
+    const base = () =>
+      ctx.db.select({ p: photos, g: galleries, e: events, owner: users.name }).from(photos)
+        .innerJoin(events, eq(events.id, photos.eventId))
+        .innerJoin(users, eq(users.id, events.ownerId))
+        .leftJoin(galleries, eq(galleries.id, photos.galleryId));
+    const order = f.collectionId
+      ? [sql`(select ci.sort_order from ${collectionItems} ci where ci.photo_id = ${photos.id} and ci.collection_id = ${f.collectionId})`, asc(photos.id)]
+      : [asc(photos.sortOrder), asc(photos.takenAt), asc(photos.createdAt), asc(photos.id)];
     const [rows, [{ total } = { total: 0 }]] = await Promise.all([
-      ctx.db.select({ p: photos, g: galleries }).from(photos).leftJoin(galleries, eq(galleries.id, photos.galleryId)).where(where)
-        .orderBy(asc(photos.sortOrder), asc(photos.takenAt), asc(photos.createdAt), asc(photos.id)).limit(limit).offset(offset),
-      ctx.db.select({ total: count() }).from(photos).leftJoin(galleries, eq(galleries.id, photos.galleryId)).where(where),
+      base().where(where).orderBy(...order).limit(limit).offset(offset),
+      ctx.db.select({ total: count() }).from(photos)
+        .innerJoin(events, eq(events.id, photos.eventId))
+        .leftJoin(galleries, eq(galleries.id, photos.galleryId))
+        .where(where),
     ]);
+    const canImages = client.scopes.includes('images:read');
     const canDownload = client.scopes.includes('downloads:read');
     return {
-      items: rows.map(({ p, g }) => ({
+      items: rows.map(({ p, g, e, owner }) => ({
         id: p.id,
-        galleryId: p.galleryId,
+        type: p.mediaType,
+        title: p.title ?? p.filename.replace(/\.[^.]+$/, ''),
         filename: p.filename,
+        description: p.description,
+        tags: p.tags,
         width: p.width,
         height: p.height,
+        durationSeconds: p.durationSeconds,
         takenAt: p.takenAt,
-        urls: {
-          thumbnail: mediaUrl(client, p.id, 'thumbnail'),
-          preview: mediaUrl(client, p.id, 'preview'),
-          download: canDownload && effectiveDownloadPolicy(ev, g, p) !== 'disabled' ? mediaUrl(client, p.id, 'download') : null,
-        },
+        galleryId: p.galleryId,
+        event: eventContext(e),
+        photographer: owner,
+        downloadName: downloadName(p),
+        urls: canImages
+          ? {
+              thumbnail: mediaUrl(client, p.id, 'thumbnail'),
+              preview: mediaUrl(client, p.id, 'preview'),
+              download: canDownload && effectiveDownloadPolicy(e, g, p) !== 'disabled' ? mediaUrl(client, p.id, 'download') : null,
+            }
+          : null,
       })),
       total,
       page,
@@ -106,6 +164,25 @@ export function createWebsiteViews(ctx: AppContext) {
     };
   }
 
-  return { visibleEvents, loadEvent, mediaUrl, eventJson, listEvents, galleriesOf, photosOf };
+  // ---- collections ----
+  async function loadCollection(idOrSlug: string) {
+    const where = isUuid(idOrSlug) ? eq(collections.id, idOrSlug) : eq(collections.slug, idOrSlug.toLowerCase());
+    const [c] = await ctx.db.select().from(collections).where(and(where, eq(collections.status, 'published')));
+    if (!c) throw notFound('Collection not found');
+    return c;
+  }
+
+  async function listCollections(client: ApiClient, query: { page?: number; pageSize?: number }) {
+    const { limit, offset, page, pageSize } = pageParams(query);
+    const rows = await ctx.db.select().from(collections).where(eq(collections.status, 'published')).orderBy(asc(collections.name)).limit(limit).offset(offset);
+    const [{ total } = { total: 0 }] = await ctx.db.select({ total: count() }).from(collections).where(eq(collections.status, 'published'));
+    // Counts only include what this credential may actually see.
+    const items = await Promise.all(rows.map(async (c) => ({ id: c.id, slug: c.slug, name: c.name, description: c.description, mediaCount: (await mediaOf(client, { collectionId: c.id, pageSize: 1 })).total })));
+    return { items, total, page, pageSize };
+  }
+
+  const photosOf = (client: ApiClient, ev: Event, f: Omit<MediaFilters, 'eventId'> = {}) => mediaOf(client, { ...f, eventId: ev.id });
+
+  return { visibleEvents, loadEvent, mediaUrl, eventJson, eventContext, listEvents, galleriesOf, photosOf, mediaOf, loadCollection, listCollections };
 }
 export type WebsiteViews = ReturnType<typeof createWebsiteViews>;

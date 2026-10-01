@@ -9,6 +9,9 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
 import type { Readable } from 'node:stream';
 import type { Config } from '../config.js';
 
@@ -28,6 +31,9 @@ export interface Storage {
   head(key: string): Promise<ObjectInfo | null>;
   get(key: string): Promise<Buffer>;
   put(key: string, body: Buffer, contentType: string): Promise<void>;
+  /** Streaming variants for large files (videos): never hold the whole object in memory. */
+  downloadToFile(key: string, filePath: string): Promise<void>;
+  uploadFile(key: string, filePath: string, contentType: string): Promise<void>;
   delete(keys: string[]): Promise<void>;
   ping(): Promise<boolean>;
 }
@@ -94,6 +100,14 @@ export function createS3Storage(config: Config): Storage {
     async put(key, body, contentType) {
       await internal.send(new PutObjectCommand({ Bucket, Key: key, Body: body, ContentType: contentType }));
     },
+    async downloadToFile(key, filePath) {
+      const r = await internal.send(new GetObjectCommand({ Bucket, Key: key }));
+      await pipeline(r.Body as Readable, createWriteStream(filePath));
+    },
+    async uploadFile(key, filePath, contentType) {
+      const { size } = await stat(filePath);
+      await internal.send(new PutObjectCommand({ Bucket, Key: key, Body: createReadStream(filePath), ContentLength: size, ContentType: contentType }));
+    },
     async delete(keys) {
       if (keys.length === 0) return;
       if (keys.length === 1) {
@@ -140,6 +154,14 @@ export function createMemoryStorage(): Storage & { objects: Map<string, { body: 
     },
     async put(key, body, contentType) {
       objects.set(key, { body, contentType });
+    },
+    async downloadToFile(key, filePath) {
+      const o = objects.get(key);
+      if (!o) throw new Error(`missing object ${key}`);
+      await writeFile(filePath, o.body);
+    },
+    async uploadFile(key, filePath, contentType) {
+      objects.set(key, { body: await readFile(filePath), contentType });
     },
     async delete(keys) {
       for (const k of keys) objects.delete(k);

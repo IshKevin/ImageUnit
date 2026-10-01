@@ -28,7 +28,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
     return u;
   }
 
-  function validatePermissions(role: 'admin' | 'photographer', lists: string[][]) {
+  function validatePermissions(role: 'admin' | 'editor' | 'photographer', lists: string[][]) {
     if (role === 'admin') return; // admins always hold everything; lists are irrelevant
     for (const list of lists) {
       for (const p of list) {
@@ -50,7 +50,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
     const q = parse(
       z.object({
         q: z.string().max(100).optional(),
-        role: z.enum(['admin', 'photographer']).optional(),
+        role: z.enum(['admin', 'editor', 'photographer']).optional(),
         status: z.enum(['active', 'suspended', 'inactive']).optional(),
         page: z.coerce.number().optional(),
         pageSize: z.coerce.number().optional(),
@@ -75,7 +75,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
       z.object({
         email: z.string().email().max(200),
         name: z.string().trim().min(1).max(120),
-        role: z.enum(['admin', 'photographer']).default('photographer'),
+        role: z.enum(['admin', 'editor', 'photographer']).default('photographer'),
         password: passwordSchema.optional(),
         grantedPermissions: permissionList.default([]),
         revokedPermissions: permissionList.default([]),
@@ -127,7 +127,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
     const body = parse(
       z.object({
         name: z.string().trim().min(1).max(120).optional(),
-        role: z.enum(['admin', 'photographer']).optional(),
+        role: z.enum(['admin', 'editor', 'photographer']).optional(),
         grantedPermissions: permissionList.optional(),
         revokedPermissions: permissionList.optional(),
         storageQuotaBytes: z.number().int().positive().nullable().optional(),

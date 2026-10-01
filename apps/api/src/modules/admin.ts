@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, ilike, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { QUEUES } from '../context.js';
@@ -143,7 +143,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       ctx.storage.ping(),
       ctx.redis ? ctx.redis.ping().then(() => true, () => false) : Promise.resolve(false),
     ]);
-    const [photoQueue, maintenance] = await Promise.all([ctx.queues.photos.getJobCounts(), ctx.queues.maintenance.getJobCounts()]).catch(() => [null, null]);
+    const [photoQueue, videoQueue, maintenance] = await Promise.all([ctx.queues.photos.getJobCounts(), ctx.queues.videos.getJobCounts(), ctx.queues.maintenance.getJobCounts()]).catch(() => [null, null, null]);
     const [row] = await ctx.db
       .select({
         failed: sql<number>`count(*) filter (where status = 'failed')::int`,
@@ -157,7 +157,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       status: dbOk && storageOk && redisOk ? 'ok' : 'degraded',
       checks: { database: dbOk, storage: storageOk, redis: redisOk },
       latencyMs: Date.now() - started,
-      queues: { [QUEUES.photos]: photoQueue, [QUEUES.maintenance]: maintenance },
+      queues: { [QUEUES.photos]: photoQueue, [QUEUES.videos]: videoQueue, [QUEUES.maintenance]: maintenance },
       photos: { failed: row?.failed ?? 0, stuck: row?.stuck ?? 0, abandonedUploads: row?.abandoned ?? 0 },
       security: { lockedAccounts: lockedUsers?.n ?? 0, lockoutsLast24h: failedLogins24h[0]?.n ?? 0 },
     };
@@ -180,7 +180,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
   app.post('/notifications/read', { preHandler: guard.user }, async (req) => {
     const { ids } = parse(z.object({ ids: z.array(z.string().uuid()).max(200).optional() }), req.body ?? {});
     const conds = [visibleTo(req.user!), sql`${notifications.readAt} is null`];
-    if (ids?.length) conds.push(sql`${notifications.id} = any(${ids})`);
+    if (ids?.length) conds.push(inArray(notifications.id, ids));
     await ctx.db.update(notifications).set({ readAt: new Date() }).where(and(...conds));
     return { ok: true };
   });

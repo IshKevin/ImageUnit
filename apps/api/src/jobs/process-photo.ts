@@ -17,6 +17,13 @@ const MAX_PIXELS = 300_000_000;
 /** Thrown for problems retrying cannot fix (corrupt or unsupported file). */
 export class PermanentProcessingError extends Error {}
 
+/** Routes a freshly uploaded item to the image or video pipeline. Idempotent. */
+export async function processMedia(ctx: AppContext, photoId: string): Promise<'ready' | 'skipped'> {
+  const [row] = await ctx.db.select({ type: photos.mediaType }).from(photos).where(eq(photos.id, photoId));
+  if (row?.type === 'video') return (await import('./process-video.js')).processVideo(ctx, photoId);
+  return processPhoto(ctx, photoId);
+}
+
 export async function processPhoto(ctx: AppContext, photoId: string): Promise<'ready' | 'skipped'> {
   const [photo] = await ctx.db.select().from(photos).where(eq(photos.id, photoId));
   // Idempotent: duplicate or late jobs for finished/absent photos are no-ops.
@@ -108,7 +115,7 @@ export async function markFailed(ctx: AppContext, photoId: string, message: stri
 }
 
 /** One summary notification per finished batch rather than one per photo. */
-async function notifyIfBatchDone(ctx: AppContext, eventId: string) {
+export async function notifyIfBatchDone(ctx: AppContext, eventId: string) {
   const [{ pending } = { pending: 0 }] = await ctx.db
     .select({ pending: sql<number>`count(*)::int` })
     .from(photos)

@@ -29,6 +29,11 @@ const schema = z.object({
   BOOTSTRAP_ADMIN_PASSWORD: z.string().min(12).optional(),
   STORAGE_TOTAL_BYTES: z.coerce.number().default(10 * 1024 ** 4),
   MAX_UPLOAD_BYTES: z.coerce.number().default(100 * 1024 * 1024),
+  MAX_VIDEO_BYTES: z.coerce.number().default(2 * 1024 * 1024 * 1024),
+  /** Concurrent video transcodes per worker process (CPU heavy). */
+  WORKER_VIDEO_CONCURRENCY: z.coerce.number().int().min(1).default(1),
+  FFMPEG_PATH: z.string().optional(),
+  FFPROBE_PATH: z.string().optional(),
   API_PUBLIC_URL: z.string().url().default('http://localhost:4000'),
   TRUST_PROXY: looseBool,
   LOGIN_RATE_LIMIT: z.coerce.number().default(10),

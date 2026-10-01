@@ -5,15 +5,18 @@ import { events, galleries, photos, users, type Photo } from '../db/schema.js';
 import { isUuid, loadManagedEvent, makeGuards } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
-import { AppError, badRequest, conflict, notFound } from '../lib/errors.js';
+import { AppError, badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
 import { enqueuePhoto } from '../lib/jobs.js';
-import { ALLOWED_TYPES, photoKeys } from '../lib/media.js';
+import { ALLOWED_TYPES, downloadName, mediaKindOf, normalizeTags, photoKeys } from '../lib/media.js';
 
 const MAX_BATCH = 200;
 
 export const photoRoutes: FastifyPluginAsync = async (app) => {
   const ctx = app.ctx;
   const guard = makeGuards(ctx);
+
+  const limitFor = (contentType: string) => (mediaKindOf(contentType) === 'video' ? ctx.config.MAX_VIDEO_BYTES : ctx.config.MAX_UPLOAD_BYTES);
+  const humanSize = (n: number) => (n >= 1024 ** 3 ? `${+(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1048576)} MB`);
 
   async function loadPhoto(req: FastifyRequest, id: string) {
     if (!isUuid(id)) throw notFound('Photograph not found');
@@ -29,7 +32,12 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
       id: p.id,
       eventId: p.eventId,
       galleryId: p.galleryId,
+      mediaType: p.mediaType,
       filename: p.filename,
+      title: p.title,
+      description: p.description,
+      tags: p.tags,
+      durationSeconds: p.durationSeconds,
       contentType: p.contentType,
       sizeBytes: p.sizeBytes,
       width: p.width,
@@ -78,7 +86,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
     const rejected: { filename: string; reason: string }[] = [];
     const accepted = body.files.filter((f) => {
       if (!ALLOWED_TYPES[f.contentType]) rejected.push({ filename: f.filename, reason: `Unsupported type ${f.contentType}` });
-      else if (f.sizeBytes > ctx.config.MAX_UPLOAD_BYTES) rejected.push({ filename: f.filename, reason: `Larger than ${Math.round(ctx.config.MAX_UPLOAD_BYTES / 1048576)} MB` });
+      else if (f.sizeBytes > limitFor(f.contentType)) rejected.push({ filename: f.filename, reason: `Larger than ${humanSize(limitFor(f.contentType))}` });
       else return true;
       return false;
     });
@@ -110,6 +118,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
                 uploaderId: req.user!.id,
                 filename: f.filename,
                 contentType: f.contentType,
+                mediaType: mediaKindOf(f.contentType),
                 sizeBytes: f.sizeBytes,
                 originalKey: `events/${ev.id}/originals/${id}.${ALLOWED_TYPES[f.contentType]}`,
               };
@@ -208,9 +217,14 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
 
   // ---------- organise ----------
 
-  app.patch('/photos/:id', { preHandler: guard.perm('galleries:manage') }, async (req) => {
+  app.patch('/photos/:id', { preHandler: guard.user }, async (req) => {
     const body = parse(
       z.object({
+        // Descriptive metadata (needs media:edit)
+        title: z.string().trim().max(200).nullable().optional(),
+        description: z.string().max(5000).optional(),
+        tags: z.array(z.string().max(200)).max(60).optional(),
+        // Organisation (needs galleries:manage)
         galleryId: z.string().uuid().nullable().optional(),
         isHidden: z.boolean().optional(),
         downloadPolicy: z.enum(['disabled', 'preview', 'full']).nullable().optional(),
@@ -218,13 +232,33 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
       }),
       req.body,
     );
+    const touchesMeta = body.title !== undefined || body.description !== undefined || body.tags !== undefined;
+    const touchesOrg = body.galleryId !== undefined || body.isHidden !== undefined || body.downloadPolicy !== undefined || body.sortOrder !== undefined;
+    if (touchesMeta && !req.perms!.has('media:edit')) throw forbidden('Missing permission: media:edit');
+    if (touchesOrg && !req.perms!.has('galleries:manage')) throw forbidden('Missing permission: galleries:manage');
+    if (!touchesMeta && !touchesOrg) throw badRequest('Nothing to update');
+
     const { photo } = await loadPhoto(req, (req.params as { id: string }).id);
     if (body.galleryId) {
       const [g] = await ctx.db.select({ id: galleries.id }).from(galleries).where(and(eq(galleries.id, body.galleryId), eq(galleries.eventId, photo.eventId)));
       if (!g) throw badRequest('Gallery does not belong to this event');
     }
-    const [row] = await ctx.db.update(photos).set(body).where(eq(photos.id, photo.id)).returning();
-    return { photo: await photoView(row!) };
+    const patch = { ...body, ...(body.title !== undefined && { title: body.title || null }), ...(body.tags !== undefined && { tags: normalizeTags(body.tags) }) };
+    const row = await ctx.db.transaction(async (tx) => {
+      const [updated] = await tx.update(photos).set(patch).where(eq(photos.id, photo.id)).returning();
+      if (touchesMeta) {
+        await audit(tx, actorFromRequest(req), {
+          action: 'media.updated',
+          entityType: 'photo',
+          entityId: photo.id,
+          eventId: photo.eventId,
+          before: { title: photo.title, description: photo.description, tags: photo.tags },
+          after: { title: updated!.title, description: updated!.description, tags: updated!.tags },
+        });
+      }
+      return updated!;
+    });
+    return { photo: await photoView(row) };
   });
 
   app.post('/events/:id/photos/bulk', { preHandler: guard.perm('galleries:manage') }, async (req) => {
@@ -252,7 +286,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
   app.get('/photos/:id/original', { preHandler: guard.perm('images:download') }, async (req) => {
     const { photo } = await loadPhoto(req, (req.params as { id: string }).id);
     if (photo.status === 'pending_upload') throw conflict('Not uploaded yet');
-    return { url: await ctx.storage.presignDownload(photo.originalKey, { filename: photo.filename, inline: false }) };
+    return { url: await ctx.storage.presignDownload(photo.originalKey, { filename: downloadName(photo), inline: false }) };
   });
 
   // ---------- permanent deletion: administrators only ----------

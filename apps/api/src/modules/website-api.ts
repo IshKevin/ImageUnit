@@ -9,6 +9,7 @@ import { pageParams, parse } from '../http/validate.js';
 import { effectiveDownloadPolicy, isPubliclyAvailable } from '../lib/access.js';
 import { hashApiKey, signMedia, verifyMedia, type Scope } from '../lib/api-keys.js';
 import { AppError, forbidden, notFound, unauthorized } from '../lib/errors.js';
+import { downloadName } from '../lib/media.js';
 import { track } from '../lib/public-access.js';
 import { createWebsiteViews } from '../lib/website-views.js';
 
@@ -91,11 +92,49 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
     return views.galleriesOf(ev);
   });
 
-  app.get('/v1/events/:id/photos', { preHandler: authenticate('images:read') }, async (req) => {
-    const client = req.apiClient!;
-    const query = parse(z.object({ galleryId: z.string().uuid().optional(), page: z.coerce.number().optional(), pageSize: z.coerce.number().optional() }), req.query);
-    const ev = await loadEvent(client, (req.params as { id: string }).id);
-    return views.photosOf(client, ev, query);
+  const mediaQuery = z.object({
+    type: z.enum(['image', 'video']).optional(),
+    q: z.string().trim().max(100).optional(),
+    tag: z.string().trim().max(60).optional(),
+    galleryId: z.string().uuid().optional(),
+    page: z.coerce.number().optional(),
+    pageSize: z.coerce.number().optional(),
+  });
+
+  // `/photos` is kept as an alias of `/media` for existing integrations; both return images and videos.
+  for (const path of ['media', 'photos']) {
+    app.get(`/v1/events/:id/${path}`, { preHandler: authenticate('images:read') }, async (req) => {
+      const client = req.apiClient!;
+      const query = parse(mediaQuery, req.query);
+      const ev = await loadEvent(client, (req.params as { id: string }).id);
+      return views.photosOf(client, ev, query);
+    });
+  }
+
+  /** Search across everything the credential may see: `?q=` words, `?type=video`, `?tag=`. */
+  app.get('/v1/media', { preHandler: authenticate('images:read') }, async (req) => views.mediaOf(req.apiClient!, parse(mediaQuery, req.query)));
+
+  app.get('/v1/media/:id', { preHandler: authenticate('images:read') }, async (req) => {
+    const { id } = parse(z.object({ id: z.string().uuid() }), req.params);
+    const r = await views.mediaOf(req.apiClient!, { id, pageSize: 1 });
+    if (!r.items[0]) throw notFound('Media not found');
+    return { media: r.items[0] };
+  });
+
+  // ---- collections: curated sets of media, possibly spanning many events ----
+  app.get('/v1/collections', { preHandler: authenticate('collections:read') }, async (req) =>
+    views.listCollections(req.apiClient!, parse(z.object({ page: z.coerce.number().optional(), pageSize: z.coerce.number().optional() }), req.query)),
+  );
+
+  app.get('/v1/collections/:id', { preHandler: authenticate('collections:read') }, async (req) => {
+    const c = await views.loadCollection((req.params as { id: string }).id);
+    const { total } = await views.mediaOf(req.apiClient!, { collectionId: c.id, pageSize: 1 });
+    return { collection: { id: c.id, slug: c.slug, name: c.name, description: c.description, mediaCount: total } };
+  });
+
+  app.get('/v1/collections/:id/media', { preHandler: authenticate('collections:read') }, async (req) => {
+    const c = await views.loadCollection((req.params as { id: string }).id);
+    return views.mediaOf(req.apiClient!, { ...parse(mediaQuery, req.query), collectionId: c.id });
   });
 
   // Media is delivered through signed, expiring URLs. Each hit re-validates the credential, the event and the download policy.
@@ -120,8 +159,10 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
     if (!row || !isPubliclyAvailable(row.ev) || (row.g && !row.g.isVisible)) throw notFound('Photograph not found');
 
     let key: string | null;
+    let policyIsFull = false;
     if (kind === 'download') {
       const policy = effectiveDownloadPolicy(row.ev, row.g, row.p);
+      policyIsFull = policy === 'full';
       if (policy === 'disabled') throw forbidden('Downloads are disabled for this event');
       key = policy === 'full' ? row.p.originalKey : row.p.previewKey;
       await track(ctx, req, { eventId: row.ev.id, photoId: id, type: 'download', source: 'api' });
@@ -130,7 +171,7 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
       key = kind === 'thumbnail' ? row.p.thumbKey : row.p.previewKey;
     }
     if (!key) throw notFound('File unavailable');
-    const url = await ctx.storage.presignDownload(key, { ttlSeconds: 120, ...(kind === 'download' && { filename: row.p.filename, inline: false }) });
+    const url = await ctx.storage.presignDownload(key, { ttlSeconds: 120, ...(kind === 'download' && { filename: downloadName(row.p, policyIsFull ? undefined : row.p.mediaType === 'video' ? 'mp4' : 'jpg'), inline: false }) });
     reply.header('cache-control', 'private, max-age=60');
     return reply.redirect(url, 302);
   });

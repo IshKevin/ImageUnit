@@ -37,6 +37,7 @@ export async function createTestApp() {
     log: createLogger(config),
     queues: {
       photos: { add: vi.fn(async (name: string, data: unknown) => void added.push({ name, data })) as never, getJobCounts: (async () => ({})) as never },
+      videos: { add: vi.fn(async (name: string, data: unknown) => void added.push({ name, data })) as never, getJobCounts: (async () => ({})) as never },
       maintenance: { add: vi.fn() as never, getJobCounts: (async () => ({})) as never, upsertJobScheduler: vi.fn() as never },
     },
   };
@@ -46,7 +47,7 @@ export async function createTestApp() {
 }
 export type TestApp = Awaited<ReturnType<typeof createTestApp>>;
 
-export async function makeUser(t: TestApp, role: 'admin' | 'photographer' = 'photographer', extra: Partial<typeof users.$inferInsert> = {}) {
+export async function makeUser(t: TestApp, role: 'admin' | 'editor' | 'photographer' = 'photographer', extra: Partial<typeof users.$inferInsert> = {}) {
   const email = `${uniq(role)}@test.dev`;
   const [u] = await t.ctx.db.insert(users).values({ email, name: `Test ${role}`, role, passwordHash: await hashPassword(PASSWORD), ...extra }).returning();
   return { ...u!, password: PASSWORD };
@@ -58,7 +59,7 @@ export async function login(t: TestApp, email: string, password = PASSWORD) {
   return { res, cookie: cookie ? `iu_session=${cookie.value}` : '' };
 }
 
-export async function session(t: TestApp, role: 'admin' | 'photographer' = 'photographer', extra: Partial<typeof users.$inferInsert> = {}) {
+export async function session(t: TestApp, role: 'admin' | 'editor' | 'photographer' = 'photographer', extra: Partial<typeof users.$inferInsert> = {}) {
   const user = await makeUser(t, role, extra);
   const { cookie } = await login(t, user.email);
   const call = (method: string, url: string, payload?: unknown) => t.app.inject({ method: method as never, url, payload: payload as never, headers: { cookie } });
@@ -82,13 +83,38 @@ export async function uploadPhoto(t: TestApp, s: Session, eventId: string, opts:
 }
 
 export async function readyPhoto(t: TestApp, s: Session, eventId: string) {
-  const { processPhoto } = await import('../src/jobs/process-photo.js');
+  const { processMedia } = await import('../src/jobs/process-photo.js');
   const up = await uploadPhoto(t, s, eventId);
-  await processPhoto(t.ctx, up.photoId);
+  await processMedia(t.ctx, up.photoId);
   return up.photoId;
 }
 
 export async function makeEvent(s: Session, body: Record<string, unknown> = {}) {
   const res = await s.post('/api/events', { name: `Event ${uniq()}`, ...body });
   return res.json().event as { id: string; slug: string; status: string };
+}
+
+/** A real 2-second H.264/AAC clip generated with the bundled ffmpeg. */
+export async function testVideo(opts: { seconds?: number; size?: string; format?: 'mp4' | 'webm' } = {}): Promise<Buffer> {
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { ffmpegBin, run } = await import('../src/lib/ffmpeg.js');
+  const dir = await mkdtemp(join(tmpdir(), 'iu-test-'));
+  const out = join(dir, `clip.${opts.format ?? 'mp4'}`);
+  const seconds = String(opts.seconds ?? 2);
+  const codecs = opts.format === 'webm' ? ['-c:v', 'libvpx-vp9', '-c:a', 'libopus'] : ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac'];
+  try {
+    await run(ffmpegBin, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc=duration=${seconds}:size=${opts.size ?? '640x360'}:rate=25`, '-f', 'lavfi', '-i', `sine=frequency=440:duration=${seconds}`, ...codecs, '-shortest', '-y', out], { timeoutMs: 60_000 });
+    return await readFile(out);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+export async function readyVideo(t: TestApp, s: Session, eventId: string, name = 'CLIP_001.mp4') {
+  const { processMedia } = await import('../src/jobs/process-photo.js');
+  const up = await uploadPhoto(t, s, eventId, { data: await testVideo(), filename: name, contentType: 'video/mp4' });
+  await processMedia(t.ctx, up.photoId);
+  return up.photoId;
 }

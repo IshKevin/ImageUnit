@@ -7,6 +7,7 @@ import {
   integer,
   jsonb,
   pgEnum,
+  real,
   pgTable,
   primaryKey,
   text,
@@ -15,7 +16,9 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
-export const userRole = pgEnum('user_role', ['admin', 'photographer']);
+export const userRole = pgEnum('user_role', ['admin', 'editor', 'photographer']);
+export const mediaType = pgEnum('media_type', ['image', 'video']);
+export const collectionStatus = pgEnum('collection_status', ['draft', 'published']);
 export const userStatus = pgEnum('user_status', ['active', 'suspended', 'inactive']);
 export const eventStatus = pgEnum('event_status', [
   'draft',
@@ -150,7 +153,13 @@ export const photos = pgTable(
     uploaderId: uuid('uploader_id')
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
+    mediaType: mediaType('media_type').notNull().default('image'),
     filename: text('filename').notNull(),
+    /** Display name set by editors; falls back to the filename. The stored file name never changes. */
+    title: text('title'),
+    description: text('description').notNull().default(''),
+    tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
+    durationSeconds: real('duration_seconds'),
     contentType: text('content_type').notNull(),
     sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
     width: integer('width'),
@@ -179,6 +188,39 @@ export const photos = pgTable(
     index('photos_uploader_idx').on(t.uploaderId),
     index('photos_event_order_idx').on(t.eventId, t.takenAt, t.createdAt),
   ],
+);
+
+/** Curated sets of media, possibly spanning many events, exposed to company websites by slug. */
+export const collections = pgTable(
+  'collections',
+  {
+    id: id(),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    status: collectionStatus('status').notNull().default('draft'),
+    coverPhotoId: uuid('cover_photo_id').references(() => photos.id, { onDelete: 'set null' }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('collections_slug_unique').on(t.slug)],
+);
+
+export const collectionItems = pgTable(
+  'collection_items',
+  {
+    collectionId: uuid('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    photoId: uuid('photo_id')
+      .notNull()
+      .references(() => photos.id, { onDelete: 'cascade' }),
+    sortOrder: integer('sort_order').notNull().default(0),
+    addedBy: uuid('added_by').references(() => users.id, { onDelete: 'set null' }),
+    addedAt: timestamp('added_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.collectionId, t.photoId] }), index('collection_items_photo_idx').on(t.photoId), index('collection_items_order_idx').on(t.collectionId, t.sortOrder)],
 );
 
 export const apiClients = pgTable(
@@ -289,3 +331,4 @@ export type Event = typeof events.$inferSelect;
 export type Gallery = typeof galleries.$inferSelect;
 export type Photo = typeof photos.$inferSelect;
 export type ApiClient = typeof apiClients.$inferSelect;
+export type Collection = typeof collections.$inferSelect;

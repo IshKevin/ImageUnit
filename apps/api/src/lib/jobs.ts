@@ -13,7 +13,8 @@ export async function enqueuePhoto(ctx: AppContext, photoId: string) {
     .update(photos)
     .set({ status: 'uploaded', error: null, attempts: sql`${photos.attempts} + 1` })
     .where(eq(photos.id, photoId))
-    .returning({ attempts: photos.attempts });
+    .returning({ attempts: photos.attempts, mediaType: photos.mediaType });
   if (!row) return;
-  await ctx.queues.photos.add('process', { photoId } satisfies ProcessPhotoJob, { jobId: photoJobId(photoId, row.attempts) });
+  const queue = row.mediaType === 'video' ? ctx.queues.videos : ctx.queues.photos;
+  await queue.add('process', { photoId } satisfies ProcessPhotoJob, { jobId: photoJobId(photoId, row.attempts) });
 }

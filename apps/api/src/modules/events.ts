@@ -12,6 +12,7 @@ import { badRequest, conflict, forbidden } from '../lib/errors.js';
 import { assertTransition } from '../lib/lifecycle.js';
 import { photoKeys } from '../lib/media.js';
 import { getSettings } from '../lib/settings.js';
+import { seesAllEvents } from '../lib/permissions.js';
 import { slugify } from '../lib/slug.js';
 import { eventDto } from './event-dto.js';
 
@@ -77,7 +78,7 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
     const u = req.user!;
     const { limit, offset, page, pageSize } = pageParams(q);
     const conds: SQL[] = [];
-    if (u.role !== 'admin') conds.push(eq(events.ownerId, u.id));
+    if (!seesAllEvents(u)) conds.push(eq(events.ownerId, u.id));
     else if (q.ownerId) conds.push(eq(events.ownerId, q.ownerId));
     if (q.status) conds.push(eq(events.status, q.status));
     if (q.q) conds.push(or(ilike(events.name, `%${q.q}%`), ilike(events.location, `%${q.q}%`))!);
@@ -186,6 +187,12 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
     );
     const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id);
     const isAdmin = req.user!.role === 'admin';
+    // Someone curating another person's event (an editor) may fix names and descriptions, but access rules
+    // (visibility, downloads, password, expiry) stay with owners, publishers and administrators.
+    const touchesAccess = ['visibility', 'downloadPolicy', 'password', 'expiresAt'].some((k) => k in body);
+    if (touchesAccess && !isAdmin && ev.ownerId !== req.user!.id && !req.perms!.has('events:publish')) {
+      throw forbidden('You can edit names and descriptions, but not access settings, of events you do not own');
+    }
 
     if (['archived', 'scheduled_for_deletion'].includes(ev.status) && !isAdmin) throw forbidden('Archived events are read-only');
     // Photographers may schedule expiry while drafting; extending a live event is an administrator decision.

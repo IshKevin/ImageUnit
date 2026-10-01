@@ -72,7 +72,7 @@ export async function recoverStuckPhotos(ctx: AppContext) {
   const stuck = await ctx.db
     .select({ id: photos.id, attempts: photos.attempts })
     .from(photos)
-    .where(and(inArray(photos.status, ['uploaded', 'processing']), sql`${photos.updatedAt} < now() - interval '15 minutes'`))
+    .where(and(inArray(photos.status, ['uploaded', 'processing']), sql`${photos.updatedAt} < now() - (case when ${photos.mediaType} = 'video' then interval '3 hours' else interval '15 minutes' end)`))
     .limit(200);
   for (const p of stuck) {
     if (p.attempts >= MAX_AUTO_RECOVERIES) await markFailed(ctx, p.id, 'Processing did not complete; retry manually');

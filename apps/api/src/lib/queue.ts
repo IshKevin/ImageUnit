@@ -17,6 +17,11 @@ export function createQueues(connection: Redis): JobQueues {
         removeOnFail: { age: 7 * 24 * 3600 },
       },
     }),
+    // Transcoding is slow and CPU-bound, so videos get their own queue with its own (low) concurrency.
+    videos: new Queue(QUEUES.videos, {
+      connection,
+      defaultJobOptions: { attempts: 2, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: { age: 3600, count: 500 }, removeOnFail: { age: 7 * 24 * 3600 } },
+    }),
     maintenance: new Queue(QUEUES.maintenance, { connection }),
   };
 }

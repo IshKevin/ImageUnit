@@ -1,6 +1,6 @@
 import { hmac, randomToken, safeEqual, sha256 } from './crypto.js';
 
-export const SCOPES = ['events:read', 'galleries:read', 'images:read', 'downloads:read'] as const;
+export const SCOPES = ['events:read', 'galleries:read', 'images:read', 'downloads:read', 'collections:read'] as const;
 export type Scope = (typeof SCOPES)[number];
 
 export function generateApiKey() {

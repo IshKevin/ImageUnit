@@ -15,6 +15,20 @@
       "when": 1790696158792,
       "tag": "0001_audit_immutable",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790847254183,
+      "tag": "0002_media_collections_editor",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790847255722,
+      "tag": "0003_media_search_indexes",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { and, asc, count, eq, ilike, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { q } from '../lib/sql.js';
@@ -7,6 +7,8 @@ import { pageParams, parse } from '../http/validate.js';
 import { effectiveDownloadPolicy } from '../lib/access.js';
 import { hashPassword, verifyPassword } from '../lib/crypto.js';
 import { AppError, forbidden, unauthorized } from '../lib/errors.js';
+import { downloadName } from '../lib/media.js';
+import { textSearch } from '../lib/media-query.js';
 import { issueGrant, resolvePublicEvent, resolvePublicPhoto, track } from '../lib/public-access.js';
 
 // Verified against for events without a password so response timing is uniform.
@@ -72,7 +74,8 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
     const { limit, offset, page, pageSize } = pageParams({ ...q, pageSize: q.pageSize ?? 60 });
     const conds: SQL[] = [eq(photos.eventId, ev.id), eq(photos.status, 'ready'), eq(photos.isHidden, false), sql`(${photos.galleryId} is null or ${galleries.isVisible})`];
     if (q.galleryId) conds.push(eq(photos.galleryId, q.galleryId));
-    if (q.q) conds.push(ilike(photos.filename, `%${q.q.replace(/[%_]/g, '\\$&')}%`));
+    const text = q.q ? textSearch(q.q) : undefined;
+    if (text) conds.push(text);
     const where = and(...conds);
     const [rows, [{ total } = { total: 0 }]] = await Promise.all([
       ctx.db
@@ -88,7 +91,12 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
     return {
       items: rows.map(({ p, g }) => ({
         id: p.id,
+        type: p.mediaType,
         filename: p.filename,
+        title: p.title ?? p.filename.replace(/\.[^.]+$/, ''),
+        description: p.description,
+        tags: p.tags,
+        durationSeconds: p.durationSeconds,
         width: p.width,
         height: p.height,
         galleryId: p.galleryId,
@@ -117,8 +125,7 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
       const useOriginal = policy === 'full';
       const key = useOriginal ? photo.originalKey : photo.previewKey;
       if (!key) throw new AppError(404, 'not_found', 'File unavailable');
-      const ext = useOriginal ? photo.originalKey.split('.').pop() : 'jpg';
-      const name = photo.filename.replace(/\.[^.]+$/, '') + `.${ext}`;
+      const name = downloadName(photo, useOriginal ? undefined : photo.mediaType === 'video' ? 'mp4' : 'jpg');
       return ctx.storage.presignDownload(key, { filename: name, inline: false, ttlSeconds: 120 });
     }
     const key = kind === 'thumb' ? photo.thumbKey : photo.previewKey;

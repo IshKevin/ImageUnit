@@ -4,7 +4,7 @@ import type { AppContext } from '../context.js';
 import { events, sessions, users, type Event, type User } from '../db/schema.js';
 import { forbidden, notFound, unauthorized } from '../lib/errors.js';
 import { sha256 } from '../lib/crypto.js';
-import { effectivePermissions, type Permission } from '../lib/permissions.js';
+import { effectivePermissions, seesAllEvents, type Permission } from '../lib/permissions.js';
 
 export const SESSION_COOKIE = 'iu_session';
 export const SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
@@ -73,7 +73,7 @@ export async function loadManagedEvent(ctx: AppContext, req: FastifyRequest, eve
   const [ev] = await ctx.db.select().from(events).where(eq(events.id, eventId));
   if (!ev) throw notFound('Event not found');
   const u = req.user!;
-  if (u.role !== 'admin' && ev.ownerId !== u.id) throw notFound('Event not found');
+  if (!seesAllEvents(u) && ev.ownerId !== u.id) throw notFound('Event not found');
   return ev;
 }
 
