@@ -37,3 +37,16 @@ export function toLocalInput(iso: string | null | undefined): string {
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
 }
+
+/** 83 -> "1:23", 3725 -> "1:02:05" */
+export function duration(seconds: number | null | undefined): string {
+  if (!seconds || seconds < 0) return '0:00';
+  const s = Math.round(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+/** What to show for an item's name: the editor's title, or the file name without its extension. */
+export const displayName = (m: { title: string | null; filename: string }) => m.title?.trim() || m.filename.replace(/\.[^.]+$/, '');

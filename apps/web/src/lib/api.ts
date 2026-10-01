@@ -40,7 +40,7 @@ export const qs = (params: Record<string, string | number | undefined | null>) =
 };
 
 // ---- shared types (mirror the API DTOs) ----
-export type Role = 'admin' | 'photographer';
+export type Role = 'admin' | 'editor' | 'photographer';
 export interface User {
   id: string;
   email: string;
@@ -93,10 +93,17 @@ export interface Gallery {
   readyCount: number;
 }
 export type PhotoStatus = 'pending_upload' | 'uploaded' | 'processing' | 'ready' | 'failed';
+export type MediaType = 'image' | 'video';
 export interface Photo {
   id: string;
+  mediaType: MediaType;
   galleryId: string | null;
   filename: string;
+  /** Display name chosen by an editor; null means "use the file name". */
+  title: string | null;
+  description: string;
+  tags: string[];
+  durationSeconds: number | null;
   sizeBytes: number;
   width: number | null;
   height: number | null;
@@ -112,4 +119,55 @@ export interface Paged<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+/** One row of the library / a collection: an item plus the event it belongs to. */
+export interface LibraryItem {
+  id: string;
+  mediaType: MediaType;
+  title: string | null;
+  filename: string;
+  description: string;
+  tags: string[];
+  status: PhotoStatus;
+  error: string | null;
+  isHidden: boolean;
+  width: number | null;
+  height: number | null;
+  durationSeconds: number | null;
+  sizeBytes: number;
+  takenAt: string | null;
+  createdAt: string;
+  galleryId: string | null;
+  event: { id: string; name: string; date: string | null };
+  thumbUrl: string | null;
+}
+export interface LibraryFilter {
+  q?: string;
+  type?: MediaType;
+  eventId?: string;
+  galleryId?: string;
+  tag?: string;
+  status?: PhotoStatus;
+  hidden?: 'true' | 'false';
+  from?: string;
+  to?: string;
+  collectionId?: string;
+  notInCollectionId?: string;
+}
+/** Either explicit ids, or "everything matching this filter, except these". Mirrors the API's selection. */
+export type Selection = { ids: string[] } | { filter: LibraryFilter; excludeIds: string[] };
+
+export interface Collection {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  status: 'draft' | 'published';
+  coverPhotoId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  itemCount?: number;
+  coverUrl?: string | null;
+  apiUrl?: string;
 }
