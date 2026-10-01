@@ -6,6 +6,7 @@ import { analyticsEvents, apiClients, apiUsageDaily, auditLogs, events, notifica
 import { makeGuards } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
+import { isInternalHost, publicStorageProblem } from '../lib/storage-config.js';
 import { getSettings, platformSettingsSchema, saveSettings } from '../lib/settings.js';
 
 const BYTES = sql<number>`coalesce(sum(${photos.sizeBytes} + ${photos.previewSizeBytes} + ${photos.thumbSizeBytes}), 0)::float8`;
@@ -150,11 +151,12 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     try {
       const u = new URL(url);
       host = u.host;
-      const loopback = /^(localhost|127\.|0\.0\.0\.0|\[::1\])/i.test(u.hostname) || /^(s3|minio)$/i.test(u.hostname);
+      const loopback = isInternalHost(u.hostname);
       if (webOrigin.startsWith('https://') && u.protocol === 'http:') problems.push('The site uses https but the storage address is http: browsers block this ("mixed content"). Use an https address for S3_PUBLIC_ENDPOINT.');
       if (loopback) {
         // Not testable from the server: "localhost" here is the server itself, not the visitor's computer.
-        if (ctx.config.NODE_ENV === 'production') problems.push(`S3_PUBLIC_ENDPOINT (${url}) is an internal address that visitors' browsers cannot reach. Set it to the public domain you gave the storage service.`);
+        const internal = publicStorageProblem(ctx.config);
+        if (internal) problems.push(`${internal} Until then every upload fails.`);
         else note = 'Local address: it works for browsers on this computer and cannot be tested from the server.';
         reachable = !problems.length;
         corsOk = !problems.length;

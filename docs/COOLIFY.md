@@ -135,6 +135,15 @@ A rejection reads "Cross-origin request rejected: this request came from X but w
 
 `PUBLIC_WEB_URL` should still be set to your real address (`https://gallery.afs-rwanda.org`): it is used for the share links, QR codes and links in emails and API responses.
 
+## Uploads fail with "File was not received" or "Uploads are not available yet"
+
+Almost always `S3_PUBLIC_ENDPOINT` was never set. It then defaults to `http://localhost:8333`, which means *the visitor's own computer*, so the browser sends the photo there instead of to your server. The server now refuses to hand out such links in production ("Uploads are not available yet…") and tells administrators in the console. To fix it:
+
+1. **DNS:** create a record for a storage domain, e.g. `media.afs-rwanda.org`, pointing at the same server IP as the site.
+2. **Coolify → the `s3` service → Domains:** `https://media.afs-rwanda.org:8333` (the `:8333` is the container port).
+3. **Environment variables:** `S3_PUBLIC_ENDPOINT=https://media.afs-rwanda.org` (https, no port, no path).
+4. **Redeploy**, then open **System health → Photo and video uploads**. Uploads that were left half-done show as failed; use **Retry failed** or upload again.
+
 ## "Network error" when uploading photos
 
 Photos and videos are uploaded **directly from the browser to the storage service** (the `s3` service), so that service needs its own public domain, and the browser must be able to talk to it. Open **Console → System health → Photo and video uploads**: it tests this the way a browser would and says what is wrong. The usual causes:

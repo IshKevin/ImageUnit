@@ -136,6 +136,6 @@ describe('upload diagnostics on the health endpoint', () => {
   it('flags an internal address in production', async () => {
     const r = await health({ NODE_ENV: 'production', COOKIE_SECURE: 'true', S3_PUBLIC_ENDPOINT: 'http://localhost:8333', PUBLIC_WEB_URL: 'https://gallery.afs-rwanda.org' });
     expect(r.ok).toBe(false);
-    expect(r.problems.join(' ')).toContain('internal address');
+    expect(r.problems.join(' ')).toContain('only works on the server itself');
   });
 });

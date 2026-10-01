@@ -7,6 +7,7 @@ import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
 import { AppError, badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
 import { enqueuePhoto } from '../lib/jobs.js';
+import { publicStorageProblem } from '../lib/storage-config.js';
 import { ALLOWED_TYPES, downloadName, mediaKindOf, normalizeTags, photoKeys } from '../lib/media.js';
 
 const MAX_BATCH = 200;
@@ -100,6 +101,12 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
     if (!['draft', 'active'].includes(ev.status)) throw conflict(`Uploads are closed for ${ev.status} events`);
     if (body.asCover && req.eventAccess !== 'manage') throw forbidden('Only the event owner or an editor can set the cover');
     requireUploadRight(req, { cover: body.asCover });
+    // Never hand out upload links a visitor's browser cannot use (they would point at "localhost" on the visitor's own computer).
+    const storageProblem = publicStorageProblem(ctx.config);
+    if (storageProblem) {
+      ctx.log.error({ problem: storageProblem }, 'uploads refused: storage address is not usable from browsers');
+      throw new AppError(503, 'storage_not_configured', 'Uploads are not available yet: the file storage address has not been set up. Please tell an administrator (System health explains what to change).', { problem: storageProblem });
+    }
 
     if (body.galleryId) {
       const [g] = await ctx.db.select({ id: galleries.id }).from(galleries).where(and(eq(galleries.id, body.galleryId), eq(galleries.eventId, ev.id)));

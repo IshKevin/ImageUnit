@@ -5,6 +5,7 @@ import { audit, SYSTEM_ACTOR } from '../lib/audit.js';
 import { enqueuePhoto } from '../lib/jobs.js';
 import { notify, pruneNotifications } from '../lib/notify.js';
 import { getSettings } from '../lib/settings.js';
+import { publicStorageProblem } from '../lib/storage-config.js';
 import { markFailed } from './process-photo.js';
 
 const MAX_AUTO_RECOVERIES = 6;
@@ -48,6 +49,10 @@ export async function flagRetentionReviews(ctx: AppContext) {
 }
 
 export async function checkStorage(ctx: AppContext) {
+  const addressProblem = publicStorageProblem(ctx.config);
+  if (addressProblem) {
+    await notify(ctx.db, { type: 'storage.misconfigured', severity: 'critical', title: 'Photo and video uploads cannot work', body: addressProblem, dedupeKey: `storage-address:${new Date().toISOString().slice(0, 10)}` });
+  }
   const { storageAlertPercent, quotaAlertPercent } = await getSettings(ctx.db);
   const day = new Date().toISOString().slice(0, 10);
   const [total] = await ctx.db.select({ bytes: sql<number>`coalesce(sum(size_bytes + preview_size_bytes + thumb_size_bytes), 0)::float8` }).from(photos);

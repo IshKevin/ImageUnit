@@ -3,10 +3,14 @@ import { createContext } from './bootstrap.js';
 import { ensureBootstrapAdmin } from './db/seed.js';
 import { runMigrations } from './db/migrate.js';
 import { retry } from './lib/retry.js';
+import { publicStorageProblem } from './lib/storage-config.js';
 
 const { ctx, pool, redis } = await createContext();
 await retry('database', () => runMigrations(ctx.config.DATABASE_URL), { log: (m) => ctx.log.warn(m) });
 await ensureBootstrapAdmin(ctx);
+
+const storageProblem = publicStorageProblem(ctx.config);
+if (storageProblem) ctx.log.error(`File uploads will not work: ${storageProblem}`);
 
 const app = await buildApp(ctx);
 await app.listen({ port: ctx.config.PORT, host: '0.0.0.0' });
