@@ -12,13 +12,19 @@ export const SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
- * Cookie-authenticated, state-changing requests must originate from our own web app.
- * SameSite=Lax already blocks cross-site cookies; this is defence in depth.
+ * Cookie-authenticated, state-changing requests must originate from our own web app (or a site the operator listed in
+ * CORS_ORIGINS). SameSite=Lax already blocks cross-site cookies; this is defence in depth. The error says exactly what
+ * was received and expected, because the usual cause is a PUBLIC_WEB_URL that does not match the real address.
  */
 function assertSameOrigin(ctx: AppContext, req: FastifyRequest) {
   if (SAFE_METHODS.has(req.method)) return;
   const origin = req.headers.origin;
-  if (origin && origin !== new URL(ctx.config.PUBLIC_WEB_URL).origin) throw forbidden('Cross-origin request rejected');
+  if (!origin) return;
+  const expected = new URL(ctx.config.PUBLIC_WEB_URL).origin;
+  const trusted = ctx.config.CORS_ORIGINS.split(',').map((o) => o.trim()).filter((o) => o && o !== '*').map((o) => new URL(o).origin);
+  if (origin === expected || trusted.includes(origin)) return;
+  req.log.warn({ origin, expected }, 'cross-origin request rejected: Origin does not match PUBLIC_WEB_URL');
+  throw forbidden(`Cross-origin request rejected: this request came from ${origin}, but the site is configured as ${expected}. Set PUBLIC_WEB_URL to the address you open in the browser.`);
 }
 
 export async function loadSession(ctx: AppContext, req: FastifyRequest): Promise<User | null> {

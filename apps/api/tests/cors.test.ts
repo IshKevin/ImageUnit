@@ -53,3 +53,24 @@ describe('CORS_ORIGINS=<list>', () => {
     expect((await preflight(t, '/api/v1/events', 'https://stranger.example')).headers['access-control-allow-origin']).toBeUndefined();
   });
 });
+
+describe('same-origin protection for cookie sessions', () => {
+  let t: TestApp;
+  afterAll(async () => t?.close());
+  it('explains a PUBLIC_WEB_URL mismatch, and accepts the configured address and trusted sites', async () => {
+    t = await createTestApp({ PUBLIC_WEB_URL: 'https://gallery.afs-rwanda.org', CORS_ORIGINS: 'https://partner.example' });
+    const s = await session(t, 'photographer');
+    const post = (origin: string) => t.app.inject({ method: 'POST', url: '/api/events', payload: { name: `Origin test ${uniq()}` }, headers: { cookie: s.cookie, origin } });
+
+    const wrong = await post('https://photos.example.com');
+    expect(wrong.statusCode).toBe(403);
+    expect(wrong.json().error.message).toContain('https://photos.example.com');
+    expect(wrong.json().error.message).toContain('https://gallery.afs-rwanda.org');
+    expect(wrong.json().error.message).toContain('PUBLIC_WEB_URL');
+
+    expect((await post('https://gallery.afs-rwanda.org')).statusCode).toBe(201);
+    expect((await post('https://partner.example')).statusCode).toBe(201); // explicitly trusted
+    expect((await post('http://gallery.afs-rwanda.org')).statusCode).toBe(403); // http vs https is a different origin
+    expect((await post('https://gallery.afs-rwanda.org:4001')).statusCode).toBe(403); // so is a different port
+  });
+});

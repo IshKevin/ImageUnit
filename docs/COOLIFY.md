@@ -118,3 +118,17 @@ By default only the ImageUnit web app may call the API and load images from stor
 | `https://a.com,https://b.com` | exactly those sites, plus the web app |
 
 It applies to both the API and the image storage (the `s3` service reads the same variable), so a website can use `fetch()` or `<img crossorigin>` on the links the API returns. With `*` the API never allows cookies for other sites, so a stranger's page cannot act as a signed-in user; website keys (bearer tokens) and public galleries work from anywhere. Server-to-server calls never needed CORS. Keep website keys out of browser code regardless: pass the signed `urls` to the browser instead.
+
+## "Cross-origin request rejected"
+
+Every login or change is refused with this message when the browser's address does not match **`PUBLIC_WEB_URL`** exactly. The message now names both addresses. The match is exact: `https` vs `http`, `www.` and a port all count as different. Set it to precisely what you type in the browser, with no trailing path and no port:
+
+```
+PUBLIC_WEB_URL=https://gallery.afs-rwanda.org
+```
+Set the other public addresses at the same time, then redeploy (changing a variable needs a redeploy to take effect):
+```
+API_PUBLIC_URL=https://<the domain you gave the api service>       # what websites call, e.g. https://api.afs-rwanda.org
+S3_PUBLIC_ENDPOINT=https://<the domain you gave the s3 service>    # what browsers upload/download through, e.g. https://media.afs-rwanda.org
+```
+`check-env` (above) confirms the values parse. If you also open the site from a second address (for example the same site with and without `www.`), list the extra one in `CORS_ORIGINS`, which the same-origin check also trusts.
