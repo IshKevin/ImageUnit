@@ -55,22 +55,55 @@ describe('CORS_ORIGINS=<list>', () => {
 });
 
 describe('same-origin protection for cookie sessions', () => {
-  let t: TestApp;
-  afterAll(async () => t?.close());
-  it('explains a PUBLIC_WEB_URL mismatch, and accepts the configured address and trusted sites', async () => {
-    t = await createTestApp({ PUBLIC_WEB_URL: 'https://gallery.afs-rwanda.org', CORS_ORIGINS: 'https://partner.example' });
-    const s = await session(t, 'photographer');
-    const post = (origin: string) => t.app.inject({ method: 'POST', url: '/api/events', payload: { name: `Origin test ${uniq()}` }, headers: { cookie: s.cookie, origin } });
+  const deployed = { PUBLIC_WEB_URL: 'https://photos.example.com' }; // deliberately NOT the address people really use
+  const post = (t: TestApp, cookie: string, headers: Record<string, string>) =>
+    t.app.inject({ method: 'POST', url: '/api/events', payload: { name: `Origin test ${uniq()}` }, headers: { cookie, ...headers } });
 
-    const wrong = await post('https://photos.example.com');
-    expect(wrong.statusCode).toBe(403);
-    expect(wrong.json().error.message).toContain('https://photos.example.com');
-    expect(wrong.json().error.message).toContain('https://gallery.afs-rwanda.org');
-    expect(wrong.json().error.message).toContain('PUBLIC_WEB_URL');
+  describe('host mode (default): follows the address actually used, whatever PUBLIC_WEB_URL says', () => {
+    let t: TestApp;
+    afterAll(async () => t?.close());
+    it('accepts the real site behind a proxy and refuses other sites', async () => {
+      t = await createTestApp({ ...deployed, CORS_ORIGINS: 'https://partner.example' });
+      const s = await session(t, 'photographer');
+      // Browser at gallery.afs-rwanda.org -> proxy -> API: the API sees the original host in x-forwarded-host.
+      const behindProxy = { host: 'api:4000', 'x-forwarded-host': 'gallery.afs-rwanda.org', origin: 'https://gallery.afs-rwanda.org' };
+      expect((await post(t, s.cookie, behindProxy)).statusCode).toBe(201);
+      expect((await post(t, s.cookie, { ...behindProxy, 'x-forwarded-host': 'gallery.afs-rwanda.org, api:4000' })).statusCode).toBe(201); // proxy chain appends
+      expect((await post(t, s.cookie, { host: 'gallery.afs-rwanda.org', origin: 'http://gallery.afs-rwanda.org' })).statusCode).toBe(201); // no proxy: Host header
+      expect((await post(t, s.cookie, { origin: 'https://partner.example' })).statusCode).toBe(201); // explicitly trusted
+      expect((await post(t, s.cookie, { origin: 'https://photos.example.com' })).statusCode).toBe(201); // the configured address still works
 
-    expect((await post('https://gallery.afs-rwanda.org')).statusCode).toBe(201);
-    expect((await post('https://partner.example')).statusCode).toBe(201); // explicitly trusted
-    expect((await post('http://gallery.afs-rwanda.org')).statusCode).toBe(403); // http vs https is a different origin
-    expect((await post('https://gallery.afs-rwanda.org:4001')).statusCode).toBe(403); // so is a different port
+      // A different website replaying the cookie is refused, with a message that says why.
+      const evil = await post(t, s.cookie, { ...behindProxy, origin: 'https://evil.example' });
+      expect(evil.statusCode).toBe(403);
+      expect(evil.json().error.message).toContain('https://evil.example');
+      expect((await post(t, s.cookie, { ...behindProxy, origin: 'https://gallery.afs-rwanda.org.evil.example' })).statusCode).toBe(403);
+      expect((await post(t, s.cookie, { ...behindProxy, origin: 'not a url' })).statusCode).toBe(403);
+      // Non-browser clients send no Origin and are not affected.
+      expect((await post(t, s.cookie, {})).statusCode).toBe(201);
+    });
+  });
+
+  describe('strict mode: only the configured address', () => {
+    let t: TestApp;
+    afterAll(async () => t?.close());
+    it('refuses a correct-but-unconfigured host and explains the mismatch', async () => {
+      t = await createTestApp({ ...deployed, ORIGIN_CHECK: 'strict' });
+      const s = await session(t, 'photographer');
+      const res = await post(t, s.cookie, { 'x-forwarded-host': 'gallery.afs-rwanda.org', origin: 'https://gallery.afs-rwanda.org' });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.message).toContain('PUBLIC_WEB_URL');
+      expect((await post(t, s.cookie, { origin: 'https://photos.example.com' })).statusCode).toBe(201);
+    });
+  });
+
+  describe('off: no check', () => {
+    let t: TestApp;
+    afterAll(async () => t?.close());
+    it('accepts any origin', async () => {
+      t = await createTestApp({ ...deployed, ORIGIN_CHECK: 'off' });
+      const s = await session(t, 'photographer');
+      expect((await post(t, s.cookie, { origin: 'https://anything.example' })).statusCode).toBe(201);
+    });
   });
 });

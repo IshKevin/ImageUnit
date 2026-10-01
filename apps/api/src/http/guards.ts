@@ -12,19 +12,39 @@ export const SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
- * Cookie-authenticated, state-changing requests must originate from our own web app (or a site the operator listed in
- * CORS_ORIGINS). SameSite=Lax already blocks cross-site cookies; this is defence in depth. The error says exactly what
- * was received and expected, because the usual cause is a PUBLIC_WEB_URL that does not match the real address.
+ * Cookie-authenticated, state-changing requests must not come from another website (CSRF). SameSite=Lax already stops
+ * browsers sending the cookie cross-site; this is defence in depth, controlled by ORIGIN_CHECK:
+ *  - host:   the Origin must be the host the browser used to reach us (X-Forwarded-Host from the proxy chain, else Host).
+ *            This needs no configuration, so a mis-set PUBLIC_WEB_URL can never lock everyone out.
+ *  - strict: the Origin must equal PUBLIC_WEB_URL or a site listed in CORS_ORIGINS.
+ *  - off:    no check.
+ * Requests without an Origin header (non-browser clients) are not subject to it.
  */
 function assertSameOrigin(ctx: AppContext, req: FastifyRequest) {
-  if (SAFE_METHODS.has(req.method)) return;
+  const mode = ctx.config.ORIGIN_CHECK;
+  if (mode === 'off' || SAFE_METHODS.has(req.method)) return;
   const origin = req.headers.origin;
   if (!origin) return;
-  const expected = new URL(ctx.config.PUBLIC_WEB_URL).origin;
+
+  let originUrl: URL;
+  try {
+    originUrl = new URL(origin);
+  } catch {
+    throw forbidden('Cross-origin request rejected: malformed Origin header');
+  }
   const trusted = ctx.config.CORS_ORIGINS.split(',').map((o) => o.trim()).filter((o) => o && o !== '*').map((o) => new URL(o).origin);
-  if (origin === expected || trusted.includes(origin)) return;
-  req.log.warn({ origin, expected }, 'cross-origin request rejected: Origin does not match PUBLIC_WEB_URL');
-  throw forbidden(`Cross-origin request rejected: this request came from ${origin}, but the site is configured as ${expected}. Set PUBLIC_WEB_URL to the address you open in the browser.`);
+  const configured = new URL(ctx.config.PUBLIC_WEB_URL).origin;
+  if (origin === configured || trusted.includes(origin)) return;
+
+  if (mode === 'host') {
+    const forwarded = String(req.headers['x-forwarded-host'] ?? '').split(',')[0]?.trim();
+    const seen = (forwarded || req.headers.host || '').toLowerCase();
+    if (seen && originUrl.host.toLowerCase() === seen) return;
+    req.log.warn({ origin, host: seen }, 'cross-origin request rejected: Origin is not the host the request was sent to');
+    throw forbidden(`Cross-origin request rejected: this request came from ${origin} but was sent to ${seen || 'an unknown host'}.`);
+  }
+  req.log.warn({ origin, configured }, 'cross-origin request rejected: Origin does not match PUBLIC_WEB_URL');
+  throw forbidden(`Cross-origin request rejected: this request came from ${origin}, but the site is configured as ${configured}. Set PUBLIC_WEB_URL to the address you open in the browser.`);
 }
 
 export async function loadSession(ctx: AppContext, req: FastifyRequest): Promise<User | null> {

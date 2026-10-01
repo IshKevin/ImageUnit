@@ -34,6 +34,13 @@ const schema = z.object({
   WORKER_VIDEO_CONCURRENCY: z.coerce.number().int().min(1).default(1),
   FFMPEG_PATH: z.string().optional(),
   FFPROBE_PATH: z.string().optional(),
+  /**
+   * Protection against forged cross-site requests that replay a signed-in user's cookie.
+   *  host   (default) the request's Origin must be the host the browser actually used: needs no configuration.
+   *  strict the Origin must equal PUBLIC_WEB_URL (or a CORS_ORIGINS site).
+   *  off    no check (SameSite=Lax cookies remain the only protection).
+   */
+  ORIGIN_CHECK: z.preprocess((v) => (typeof v === 'string' ? v.trim().toLowerCase() : v), z.enum(['host', 'strict', 'off']).default('host')),
   /** Browser origins allowed to call the API: "*" (any site), or a comma-separated list. Empty = only the web app. */
   CORS_ORIGINS: z.string().default(''),
   API_PUBLIC_URL: z.string().url().default('http://localhost:4000'),
