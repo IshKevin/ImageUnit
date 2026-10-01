@@ -27,7 +27,8 @@ type UsageRow = {
   errors: number;
   bytesServed: number;
 };
-const SCOPES = ['events:read', 'galleries:read', 'images:read', 'downloads:read'];
+const SCOPES = ['events:read', 'galleries:read', 'images:read', 'downloads:read', 'collections:read'];
+const SCOPE_LABELS: Record<string, string> = { 'collections:read': 'Collections' };
 
 export default function WebsitesPage() {
   return (
@@ -161,7 +162,7 @@ function CreateWebsite({ open, onClose, onCreated }: { open: boolean; onClose: (
             {SCOPES.map((s) => (
               <label key={s} className="flex items-center gap-2 text-sm">
                 <input type="checkbox" className="size-4 accent-[var(--accent)]" checked={f.scopes.includes(s)} onChange={(e) => setF({ ...f, scopes: e.target.checked ? [...f.scopes, s] : f.scopes.filter((x) => x !== s) })} />
-                <span className="font-mono text-xs">{s}</span>
+                <span className="font-mono text-xs">{s}</span>{SCOPE_LABELS[s] && <span className="text-xs text-muted">({SCOPE_LABELS[s]})</span>}
               </label>
             ))}
           </div>

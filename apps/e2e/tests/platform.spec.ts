@@ -59,7 +59,7 @@ test.describe('Photographer', () => {
     await expect(annaS.page.getByText('Draft')).toBeVisible();
     const files = await Promise.all([image('IMG_001.jpg', [220, 60, 60]), image('IMG_002.jpg', [60, 200, 90]), image('IMG_003.jpg', [70, 90, 220], 1000, 1500), image('IMG_004.jpg', [230, 200, 40])]);
     await uploadPhotos(annaS.page, files);
-    await expect(annaS.page.getByRole('img', { name: 'IMG_003.jpg' })).toBeVisible();
+    await expect(annaS.page.getByRole('img', { name: 'IMG_003' })).toBeVisible();
   });
 
   test('rejects unsupported files per file without blocking the batch', async () => {
@@ -84,21 +84,21 @@ test.describe('Photographer', () => {
     await expect(annaS.page.getByLabel('Gallery name')).toHaveCount(2);
 
     await annaS.page.getByRole('tab', { name: 'Photographs' }).click();
-    await annaS.page.getByRole('button', { name: 'Select IMG_001.jpg' }).click();
-    await annaS.page.getByRole('button', { name: 'Select IMG_002.jpg' }).click();
+    await annaS.page.getByRole('button', { name: 'Select IMG_001' }).click();
+    await annaS.page.getByRole('button', { name: 'Select IMG_002' }).click();
     await expect(annaS.page.getByText('2 selected')).toBeVisible();
     await annaS.page.getByLabel('Move to gallery').selectOption({ label: 'Finish Line' });
     await annaS.page.getByLabel('Gallery', { exact: true }).selectOption({ label: 'Finish Line (2)' });
-    await expect(annaS.page.getByRole('img', { name: 'IMG_001.jpg' })).toBeVisible();
-    await expect(annaS.page.getByRole('img', { name: 'IMG_003.jpg' })).toHaveCount(0);
+    await expect(annaS.page.getByRole('img', { name: 'IMG_001' })).toBeVisible();
+    await expect(annaS.page.getByRole('img', { name: 'IMG_003' })).toHaveCount(0);
     await annaS.page.getByLabel('Gallery', { exact: true }).selectOption({ label: 'All galleries' });
 
     // Hide one photo from the public.
-    await annaS.page.getByRole('button', { name: 'Select IMG_005.jpg' }).click();
+    await annaS.page.getByRole('button', { name: 'Select IMG_005' }).click();
     await annaS.page.getByRole('button', { name: 'Hide' }).click();
     await expect(annaS.page.getByLabel('Hidden')).toHaveCount(1);
 
-    await annaS.page.getByRole('button', { name: 'Open IMG_004.jpg' }).click();
+    await annaS.page.getByRole('button', { name: 'Open IMG_004' }).click();
     await annaS.page.getByRole('button', { name: 'Set as cover' }).click();
     await expect(annaS.page.getByText('Cover photo updated')).toBeVisible();
     await annaS.page.keyboard.press('Escape');
@@ -131,21 +131,21 @@ test.describe('Attendee (mobile, no account)', () => {
     await page.goto(shareUrl);
     await expect(page.getByRole('heading', { name: eventName })).toBeVisible();
     await expect(page.getByText('Annual city marathon')).toBeVisible();
-    await expect(page.getByText('4 photos')).toBeVisible(); // 5 uploaded, 1 hidden
-    await expect(page.getByRole('img', { name: 'IMG_005.jpg' })).toHaveCount(0);
+    await expect(page.getByText('4 items')).toBeVisible(); // 5 uploaded, 1 hidden
+    await expect(page.getByRole('img', { name: 'IMG_005' })).toHaveCount(0);
     await expect(page.getByRole('tab', { name: 'Finish Line' })).toBeVisible();
     // No horizontal overflow on mobile.
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     await page.getByRole('tab', { name: 'Finish Line' }).click();
-    await expect(page.getByRole('img', { name: /IMG_00[12]\.jpg/ })).toHaveCount(2);
+    await expect(page.getByRole('img', { name: /IMG_00[12]/ })).toHaveCount(2);
     await page.getByRole('tab', { name: 'All' }).click();
     await page.getByLabel('Search photos').fill('IMG_003');
-    await expect(page.getByRole('img', { name: 'IMG_003.jpg' })).toBeVisible();
-    await expect(page.getByRole('img', { name: 'IMG_004.jpg' })).toHaveCount(0);
+    await expect(page.getByRole('img', { name: 'IMG_003' })).toBeVisible();
+    await expect(page.getByRole('img', { name: 'IMG_004' })).toHaveCount(0);
     await page.getByLabel('Search photos').fill('');
 
-    await page.getByRole('button', { name: 'Open IMG_004.jpg' }).click();
+    await page.getByRole('button', { name: 'Open IMG_004' }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     const [download] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('link', { name: /Download/ }).click()]);
@@ -188,13 +188,13 @@ test.describe('Attendee (mobile, no account)', () => {
     const page = await ctx.newPage();
     await page.goto(url);
     await expect(page.getByText('This gallery is password protected.')).toBeVisible();
-    await expect(page.getByRole('img', { name: 'SECRET_1.jpg' })).toHaveCount(0);
+    await expect(page.getByRole('img', { name: 'SECRET_1' })).toHaveCount(0);
     await page.getByLabel('Gallery password').fill('wrong-pass');
     await page.getByRole('button', { name: 'View photos' }).click();
     await expect(page.getByRole('alert').filter({ hasText: /incorrect/i })).toBeVisible();
     await page.getByLabel('Gallery password').fill('open-sesame');
     await page.getByRole('button', { name: 'View photos' }).click();
-    await expect(page.getByRole('img', { name: 'SECRET_1.jpg' })).toBeVisible();
+    await expect(page.getByRole('img', { name: 'SECRET_1' })).toBeVisible();
     await ctx.close();
   });
 });
@@ -280,8 +280,8 @@ test.describe('Security boundaries', () => {
     expect((await annaS.page.request.post(`/api/events/${eventId}/archive`, { data: {} })).status()).toBe(403);
     expect((await annaS.page.request.delete(`/api/events/${eventId}?confirm=x`)).status()).toBe(403);
     await annaS.page.goto(`/console/events/${eventId}`);
-    await expect(annaS.page.getByRole('button', { name: 'Select IMG_001.jpg' })).toBeVisible();
-    await annaS.page.getByRole('button', { name: 'Select IMG_001.jpg' }).click();
+    await expect(annaS.page.getByRole('button', { name: 'Select IMG_001' })).toBeVisible();
+    await annaS.page.getByRole('button', { name: 'Select IMG_001' }).click();
     await expect(annaS.page.getByRole('button', { name: /Delete/ })).toHaveCount(0); // no delete affordance either
     await annaS.page.getByRole('button', { name: 'Clear' }).click();
   });
@@ -334,7 +334,7 @@ test.describe('Administrator: oversight, lifecycle and deletion', () => {
     await expect(admin.page.getByText(anna.name).first()).toBeVisible();
     await admin.page.getByRole('link', { name: eventName }).click();
     await expect(admin.page.getByRole('heading', { name: eventName })).toBeVisible();
-    await expect(admin.page.getByRole('img', { name: 'IMG_003.jpg' })).toBeVisible();
+    await expect(admin.page.getByRole('img', { name: 'IMG_003' })).toBeVisible();
   });
 
   test('Developer tab: admin sees API details and previews exactly what a website receives; photographers do not', async () => {
@@ -350,7 +350,7 @@ test.describe('Administrator: oversight, lifecycle and deletion', () => {
     await admin.page.goto(`/console/events/${eventId}`);
     await admin.page.getByRole('tab', { name: 'Developer' }).click();
     await expect(admin.page.getByText('Available to websites')).toBeVisible();
-    await expect(admin.page.getByText(`/api/v1/events/${eventId}/photos`).first()).toBeVisible();
+    await expect(admin.page.getByText(`/api/v1/events/${eventId}/media`).first()).toBeVisible();
     await admin.page.getByRole('tab', { name: 'JavaScript' }).click();
     await expect(admin.page.getByLabel('Code example')).toContainText('Authorization: `Bearer ${process.env.IU_KEY}`');
     await admin.page.getByRole('tab', { name: 'Python' }).click();
@@ -361,9 +361,9 @@ test.describe('Administrator: oversight, lifecycle and deletion', () => {
     await admin.page.getByRole('button', { name: 'Run request' }).click();
     await expect(admin.page.getByLabel('Response body')).toContainText('"thumbnail"');
     await expect(admin.page.getByLabel('Response body')).toContainText('"total": 4');
-    await expect(admin.page.getByRole('img', { name: /IMG_00\d\.jpg/ }).first()).toBeVisible();
+    await expect(admin.page.getByRole('img', { name: /IMG_00\d/ }).first()).toBeVisible();
     // The signed thumbnails in the preview really load.
-    expect(await admin.page.getByRole('img', { name: /IMG_00\d\.jpg/ }).first().evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0)).toBe(true);
+    expect(await admin.page.getByRole('img', { name: /IMG_00\d/ }).first().evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0)).toBe(true);
   });
 
   test('extends access and the expiry closes the public gallery, then reactivates', async ({ browser }) => {
@@ -389,11 +389,11 @@ test.describe('Administrator: oversight, lifecycle and deletion', () => {
 
   test('deletes photographs permanently through the UI', async () => {
     await admin.page.getByRole('tab', { name: 'Photographs' }).click();
-    await admin.page.getByRole('button', { name: 'Select IMG_005.jpg' }).click();
+    await admin.page.getByRole('button', { name: 'Select IMG_005' }).click();
     await admin.page.getByRole('button', { name: /Delete/ }).click();
-    await admin.page.getByRole('dialog', { name: 'Permanently delete photographs?' }).getByRole('button', { name: 'Delete permanently' }).click();
+    await admin.page.getByRole('dialog', { name: 'Permanently delete photos and videos?' }).getByRole('button', { name: 'Delete permanently' }).click();
     await expect(admin.page.getByText('Photographs permanently deleted')).toBeVisible();
-    await expect(admin.page.getByRole('img', { name: 'IMG_005.jpg' })).toHaveCount(0);
+    await expect(admin.page.getByRole('img', { name: 'IMG_005' })).toHaveCount(0);
   });
 
   test('archives the event (public link stops), then permanently deletes it', async ({ browser }) => {

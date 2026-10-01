@@ -2,12 +2,12 @@
 
 import { useInfiniteQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { CalendarDays, ChevronLeft, ChevronRight, Download, MapPin, Search, Share2, X } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Download, MapPin, Play, Search, Share2, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button, Input } from '@/components/ui';
 import { get, post, qs, type Paged } from '@/lib/api';
-import { date } from '@/lib/format';
+import { date, displayName, duration } from '@/lib/format';
 
 export interface PublicEvent {
   name: string;
@@ -20,7 +20,7 @@ export interface PublicEvent {
   coverUrl: string | null;
   galleries: { id: string; name: string; description: string; photoCount: number }[];
 }
-interface PublicPhoto { id: string; filename: string; width: number | null; height: number | null; thumbUrl: string; previewUrl: string; downloadable: boolean }
+interface PublicPhoto { id: string; type: 'image' | 'video'; title: string | null; description: string; tags: string[]; durationSeconds: number | null; filename: string; width: number | null; height: number | null; thumbUrl: string; previewUrl: string; downloadable: boolean }
 
 export function GalleryClient({ slug, event }: { slug: string; event: PublicEvent }) {
   const [galleryId, setGalleryId] = useState('');
@@ -65,7 +65,7 @@ export function GalleryClient({ slug, event }: { slug: string; event: PublicEven
           <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-muted">
             {event.eventDate && <span className="inline-flex items-center gap-1.5"><CalendarDays className="size-4" />{date(event.eventDate)}</span>}
             {event.location && <span className="inline-flex items-center gap-1.5"><MapPin className="size-4" />{event.location}</span>}
-            <span>{total.toLocaleString()} photos</span>
+            <span>{total.toLocaleString()} {total === 1 ? 'item' : 'items'}</span>
           </div>
           {event.description && <p className="mt-4 max-w-2xl text-sm leading-relaxed">{event.description}</p>}
           <div className="mt-5 flex flex-wrap items-center gap-2">
@@ -84,7 +84,7 @@ export function GalleryClient({ slug, event }: { slug: string; event: PublicEven
           </div>
           <div className="relative w-40 shrink-0 sm:w-56">
             <Search className="pointer-events-none absolute left-3 top-3 size-4 text-muted" />
-            <Input className="h-10 rounded-full pl-9" placeholder="Search by file name" aria-label="Search photos" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <Input className="h-10 rounded-full pl-9" placeholder="Search photos and videos" aria-label="Search photos and videos" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
         </div>
       </div>
@@ -93,13 +93,21 @@ export function GalleryClient({ slug, event }: { slug: string; event: PublicEven
         {photos.isLoading ? (
           <div className="columns-2 gap-2 md:columns-3 lg:columns-4">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="mb-2 animate-pulse rounded-lg bg-surface-2" style={{ aspectRatio: i % 3 ? '4/3' : '3/4' }} />)}</div>
         ) : items.length === 0 ? (
-          <p className="py-24 text-center text-muted">{debounced ? 'No photos match your search.' : 'No photos to show yet.'}</p>
+          <p className="py-24 text-center text-muted">{debounced ? 'Nothing matches your search.' : 'No photos or videos to show yet.'}</p>
         ) : (
           <ul className="columns-2 gap-2 md:columns-3 lg:columns-4">
             {items.map((p, i) => (
               <li key={p.id} className="mb-2 break-inside-avoid">
-                <button onClick={() => setOpenIndex(i)} className="block w-full overflow-hidden rounded-lg bg-surface-2" aria-label={`Open ${p.filename}`}>
-                  <img src={p.thumbUrl} alt={p.filename} loading="lazy" decoding="async" width={p.width ?? undefined} height={p.height ?? undefined} style={{ aspectRatio: p.width && p.height ? `${p.width}/${p.height}` : undefined }} className="h-auto w-full object-cover transition-transform hover:scale-[1.02]" />
+                <button onClick={() => setOpenIndex(i)} className="block w-full overflow-hidden rounded-lg bg-surface-2" aria-label={`Open ${displayName(p)}${p.type === 'video' ? ' (video)' : ''}`}>
+                  <span className="relative block">
+                  <img src={p.thumbUrl} alt={displayName(p)} loading="lazy" decoding="async" width={p.width ?? undefined} height={p.height ?? undefined} style={{ aspectRatio: p.width && p.height ? `${p.width}/${p.height}` : undefined }} className="h-auto w-full object-cover transition-transform hover:scale-[1.02]" />
+                  {p.type === 'video' && (
+                    <>
+                      <span className="pointer-events-none absolute inset-0 grid place-items-center"><span className="grid size-11 place-items-center rounded-full bg-black/55 text-white"><Play className="size-5 fill-current" aria-hidden /></span></span>
+                      {p.durationSeconds != null && <span className="pointer-events-none absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs tabular-nums text-white">{duration(p.durationSeconds)}</span>}
+                    </>
+                  )}
+                  </span>
                 </button>
               </li>
             ))}
@@ -110,14 +118,16 @@ export function GalleryClient({ slug, event }: { slug: string; event: PublicEven
       </main>
 
       {openIndex !== null && items[openIndex] && (
-        <Lightbox items={items} index={openIndex} onIndex={setOpenIndex} onClose={() => setOpenIndex(null)} onNearEnd={() => photos.hasNextPage && void photos.fetchNextPage()} />
+        <Lightbox event={event} items={items} index={openIndex} onIndex={setOpenIndex} onClose={() => setOpenIndex(null)} onNearEnd={() => photos.hasNextPage && void photos.fetchNextPage()} />
       )}
     </div>
   );
 }
 
-function Lightbox({ items, index, onIndex, onClose, onNearEnd }: { items: PublicPhoto[]; index: number; onIndex: (i: number) => void; onClose: () => void; onNearEnd: () => void }) {
+function Lightbox({ event, items, index, onIndex, onClose, onNearEnd }: { event: PublicEvent; items: PublicPhoto[]; index: number; onIndex: (i: number) => void; onClose: () => void; onNearEnd: () => void }) {
   const photo = items[index]!;
+  const name = displayName(photo);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const go = useCallback((d: number) => { const n = index + d; if (n >= 0 && n < items.length) onIndex(n); if (items.length - n < 6) onNearEnd(); }, [index, items.length, onIndex, onNearEnd]);
 
   useEffect(() => { void post(`/public/photos/${photo.id}/view`).catch(() => {}); }, [photo.id]);
@@ -127,23 +137,38 @@ function Lightbox({ items, index, onIndex, onClose, onNearEnd }: { items: Public
     document.body.style.overflow = 'hidden';
     return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = ''; };
   }, [go, onClose]);
-  // Warm the neighbours.
-  useEffect(() => { for (const n of [items[index + 1], items[index - 1]]) if (n) new Image().src = n.previewUrl; }, [index, items]);
+  // Warm the neighbours (images only; videos load on demand) and stop playback when leaving a video.
+  useEffect(() => { for (const n of [items[index + 1], items[index - 1]]) if (n && n.type !== 'video') new Image().src = n.previewUrl; }, [index, items]);
+  useEffect(() => { const v = videoRef.current; return () => v?.pause(); }, [photo.id]);
 
   const touch = useRef<number | null>(null);
   return (
-    <div role="dialog" aria-modal="true" aria-label={photo.filename} className="fixed inset-0 z-50 flex flex-col bg-black/95 text-white" onTouchStart={(e) => (touch.current = e.touches[0]!.clientX)} onTouchEnd={(e) => { if (touch.current !== null) { const dx = e.changedTouches[0]!.clientX - touch.current; if (Math.abs(dx) > 60) go(dx < 0 ? 1 : -1); touch.current = null; } }}>
+    <div role="dialog" aria-modal="true" aria-label={name} className="fixed inset-0 z-50 flex flex-col bg-black/95 text-white" onTouchStart={(e) => (touch.current = e.touches[0]!.clientX)} onTouchEnd={(e) => { if (touch.current !== null) { const dx = e.changedTouches[0]!.clientX - touch.current; if (Math.abs(dx) > 60) go(dx < 0 ? 1 : -1); touch.current = null; } }}>
       <div className="flex items-center justify-between px-4 py-3">
-        <span className="truncate text-sm text-white/70">{index + 1} / {items.length}+ · {photo.filename}</span>
+        <span className="truncate text-sm text-white/70">{index + 1} / {items.length}+ · {name}</span>
         <div className="flex items-center gap-1">
           {photo.downloadable && <a href={`/api/public/photos/${photo.id}/download`} download className="inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm hover:bg-white/10"><Download className="size-4" /> Download</a>}
           <button onClick={onClose} aria-label="Close" className="grid size-10 place-items-center rounded-lg hover:bg-white/10"><X className="size-5" /></button>
         </div>
       </div>
       <div className="relative flex min-h-0 flex-1 items-center justify-center px-2 pb-4" onClick={(e) => e.target === e.currentTarget && onClose()}>
-        <button onClick={() => go(-1)} disabled={index === 0} aria-label="Previous photo" className="absolute left-2 z-10 hidden size-11 place-items-center rounded-full bg-black/50 hover:bg-black/70 disabled:opacity-0 sm:grid"><ChevronLeft className="size-6" /></button>
-        <img key={photo.id} src={photo.previewUrl} alt={photo.filename} className="max-h-full max-w-full object-contain" />
-        <button onClick={() => go(1)} disabled={index === items.length - 1} aria-label="Next photo" className="absolute right-2 z-10 hidden size-11 place-items-center rounded-full bg-black/50 hover:bg-black/70 disabled:opacity-0 sm:grid"><ChevronRight className="size-6" /></button>
+        <button onClick={() => go(-1)} disabled={index === 0} aria-label="Previous item" className="absolute left-2 z-10 hidden size-11 place-items-center rounded-full bg-black/50 hover:bg-black/70 disabled:opacity-0 sm:grid"><ChevronLeft className="size-6" /></button>
+        {photo.type === 'video' ? (
+          <video key={photo.id} ref={videoRef} controls playsInline preload="metadata" poster={photo.thumbUrl} src={photo.previewUrl} aria-label={name} className="max-h-full max-w-full bg-black object-contain" />
+        ) : (
+          <img key={photo.id} src={photo.previewUrl} alt={photo.description || name} className="max-h-full max-w-full object-contain" />
+        )}
+        <button onClick={() => go(1)} disabled={index === items.length - 1} aria-label="Next item" className="absolute right-2 z-10 hidden size-11 place-items-center rounded-full bg-black/50 hover:bg-black/70 disabled:opacity-0 sm:grid"><ChevronRight className="size-6" /></button>
+      </div>
+      <div className="max-h-[28vh] space-y-1.5 overflow-y-auto px-4 pb-4 text-sm">
+        {photo.title?.trim() && <p className="text-base font-medium">{photo.title}</p>}
+        {photo.description && <p className="max-w-3xl whitespace-pre-line text-white/80">{photo.description}</p>}
+        {photo.tags.length > 0 && <ul className="flex flex-wrap gap-1.5" aria-label="Tags">{photo.tags.map((t) => <li key={t} className="rounded-full bg-white/15 px-2.5 py-0.5 text-xs">{t}</li>)}</ul>}
+        <p className="flex flex-wrap gap-x-4 text-xs text-white/60">
+          <span>{event.name}</span>
+          {event.eventDate && <span>{date(event.eventDate)}</span>}
+          {event.location && <span>{event.location}</span>}
+        </p>
       </div>
     </div>
   );

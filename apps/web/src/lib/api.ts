@@ -141,6 +141,7 @@ export interface LibraryItem {
   galleryId: string | null;
   event: { id: string; name: string; date: string | null };
   thumbUrl: string | null;
+  previewUrl: string | null;
 }
 export interface LibraryFilter {
   q?: string;

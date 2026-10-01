@@ -22,5 +22,7 @@ export function createItemView(ctx: AppContext) {
     galleryId: p.galleryId,
     event: { id: e.id, name: e.name, date: e.eventDate },
     thumbUrl: p.status === 'ready' && p.thumbKey ? await ctx.storage.presignDownload(p.thumbKey, { ttlSeconds: 900 }) : null,
+    // Playable MP4 for videos (a JPEG for photos); only needed when an item is opened, but cheap to sign.
+    previewUrl: p.status === 'ready' && p.previewKey ? await ctx.storage.presignDownload(p.previewKey, { ttlSeconds: 900 }) : null,
   });
 }

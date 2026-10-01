@@ -188,6 +188,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
         status: z.enum(['pending_upload', 'uploaded', 'processing', 'ready', 'failed']).optional(),
         galleryId: z.string().uuid().optional(),
         hidden: z.enum(['true', 'false']).optional(),
+        type: z.enum(['image', 'video']).optional(),
         page: z.coerce.number().optional(),
         pageSize: z.coerce.number().optional(),
       }),
@@ -199,6 +200,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
     if (q.status) conds.push(eq(photos.status, q.status));
     if (q.galleryId) conds.push(eq(photos.galleryId, q.galleryId));
     if (q.hidden) conds.push(eq(photos.isHidden, q.hidden === 'true'));
+    if (q.type) conds.push(eq(photos.mediaType, q.type));
     const where = and(...conds);
     const [rows, [{ total } = { total: 0 }]] = await Promise.all([
       ctx.db.select().from(photos).where(where).orderBy(asc(photos.sortOrder), asc(photos.takenAt), desc(photos.createdAt)).limit(limit).offset(offset),

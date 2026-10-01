@@ -35,7 +35,8 @@ export const SQL_PHOTO_BYTES = 'size_bytes + preview_size_bytes + thumb_size_byt
 /** Tags are free text: trimmed, lower-cased, de-duplicated, with sane limits so filters and indexes stay predictable. */
 export function normalizeTags(tags: string[]): string[] {
   const out = new Set<string>();
-  for (const t of tags) {
+  // "winner, podium" is two tags, whichever client sent it.
+  for (const t of tags.flatMap((x) => x.split(','))) {
     const v = t.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 40);
     if (v) out.add(v);
   }

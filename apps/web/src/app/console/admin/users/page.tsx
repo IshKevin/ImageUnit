@@ -46,7 +46,7 @@ function Users() {
     <div>
       <PageHeader
         title="Users"
-        description="Manage administrators and photographers."
+        description="Manage administrators, editors and photographers."
         actions={
           <Button variant="primary" onClick={() => setCreating(true)}>
             <Plus className="size-4" aria-hidden /> New user
@@ -62,6 +62,7 @@ function Users() {
           <Select aria-label="Filter by role" className="w-40" value={role} onChange={(e) => { setRole(e.target.value); setPage(1); }}>
             <option value="">All roles</option>
             <option value="admin">Administrator</option>
+            <option value="editor">Editor</option>
             <option value="photographer">Photographer</option>
           </Select>
           <Select aria-label="Filter by status" className="w-40" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
@@ -92,7 +93,7 @@ function Users() {
                       <p className="font-medium">{u.name}</p>
                       <p className="text-xs text-muted">{u.email}</p>
                     </Td>
-                    <Td><Badge tone={u.role === 'admin' ? 'accent' : 'neutral'}>{label(u.role)}</Badge></Td>
+                    <Td><Badge tone={u.role === 'admin' ? 'accent' : u.role === 'editor' ? 'success' : 'neutral'}>{label(u.role)}</Badge></Td>
                     <Td><Badge tone={statusTone(u.status)}>{label(u.status)}</Badge></Td>
                     <Td className="text-muted">{u.lastLoginAt ? relative(u.lastLoginAt) : 'Never'}</Td>
                     <Td className="text-muted">{date(u.createdAt)}</Td>
@@ -110,6 +111,12 @@ function Users() {
     </div>
   );
 }
+
+const ROLE_HELP: Record<string, string> = {
+  photographer: 'Photographer — creates, uploads to and publishes their own events.',
+  editor: 'Editor — curates events and media across all photographers: renames, tags, galleries and collections. Cannot upload, publish or delete.',
+  admin: 'Administrator — full access, including users, websites, settings and deletion.',
+};
 
 function NewUser({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (email: string, temporaryPassword?: string) => void }) {
   const qc = useQueryClient();
@@ -136,9 +143,11 @@ function NewUser({ open, onClose, onCreated }: { open: boolean; onClose: () => v
         <Field label="Role">
           <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
             <option value="photographer">Photographer</option>
+            <option value="editor">Editor</option>
             <option value="admin">Administrator</option>
           </Select>
         </Field>
+        <p className="-mt-2 text-xs text-muted" aria-live="polite">{ROLE_HELP[form.role]}</p>
         <Field label="Password (optional)" hint="Leave blank to generate a temporary password.">
           <Input type="password" autoComplete="new-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
         </Field>

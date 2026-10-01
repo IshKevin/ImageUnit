@@ -1,4 +1,10 @@
 import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import ffmpegPath from 'ffmpeg-static';
 import sharp from 'sharp';
 
 export const ADMIN = { email: process.env.E2E_ADMIN_EMAIL ?? 'admin@example.com', password: process.env.E2E_ADMIN_PASSWORD ?? 'ChangeMe!12345' };
@@ -25,13 +31,13 @@ export async function login(browser: Browser, email: string, password: string): 
 }
 
 /** Admin UI: create a user and return the one-time temporary password. */
-export async function createUserViaUi(page: Page, name: string, email: string, role: 'Photographer' | 'Administrator' = 'Photographer') {
+export async function createUserViaUi(page: Page, name: string, email: string, role: 'Photographer' | 'Editor' | 'Administrator' = 'Photographer') {
   await page.goto('/console/admin/users');
   await page.getByRole('button', { name: /New user/ }).click();
   const dlg = page.getByRole('dialog', { name: 'New user' });
   await dlg.getByLabel('Full name').fill(name);
   await dlg.getByLabel('Email').fill(email);
-  if (role === 'Administrator') await dlg.getByLabel('Role').selectOption({ label: 'Administrator' });
+  if (role !== 'Photographer') await dlg.getByLabel('Role').selectOption({ value: role.toLowerCase() });
   await dlg.getByRole('button', { name: 'Create user' }).click();
   const secret = page.getByLabel('Secret value');
   await expect(secret).toBeVisible();
@@ -65,4 +71,16 @@ export async function publish(page: Page) {
   await page.getByRole('button', { name: 'Publish event' }).click();
   await expect(page.getByText('Status: Active')).toBeVisible();
   return page.getByLabel('Public link').inputValue();
+}
+
+/** A real short H.264/AAC clip generated with the bundled ffmpeg (so uploads go through real conversion). */
+export async function video(name: string, seconds = 2) {
+  const dir = await mkdtemp(join(tmpdir(), 'iu-e2e-'));
+  const out = join(dir, 'clip.mp4');
+  try {
+    await promisify(execFile)(ffmpegPath as unknown as string, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc=duration=${seconds}:size=640x360:rate=25`, '-f', 'lavfi', '-i', `sine=frequency=440:duration=${seconds}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-y', out]);
+    return { name, mimeType: 'video/mp4', buffer: await readFile(out) };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }

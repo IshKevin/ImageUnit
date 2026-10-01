@@ -131,6 +131,8 @@ describe('titles, descriptions and tags', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().photo).toMatchObject({ title: 'Winner crossing the line', description: 'First place, men\'s race' });
     expect(res.json().photo.tags).toEqual(['finish line', 'winner', 'x'.repeat(40)]);
+    // Comma-separated input is split into separate tags.
+    expect((await owner.patch(`/api/photos/${id}`, { tags: ['Winner, Podium', 'finish line'] })).json().photo.tags).toEqual(['winner', 'podium', 'finish line']);
     const [log] = await t.ctx.db.select().from(auditLogs).where(eq(auditLogs.entityId, id));
     expect(log).toMatchObject({ action: 'media.updated', eventId: ev.id });
     expect((log!.before as { title: unknown }).title).toBeNull();

@@ -40,8 +40,8 @@ export function PhotosTab({ event }: { event: EventItem }) {
     wasActive.current = active;
   }, [active, eid, qc]);
   const photos = useQuery({
-    queryKey: ['photos', eid, galleryId, status, page],
-    queryFn: () => get<Paged<Photo>>(`/events/${eid}/photos${qs({ galleryId, status, page, pageSize: 60 })}`),
+    queryKey: ['photos', eid, galleryId, status, type, page],
+    queryFn: () => get<Paged<Photo>>(`/events/${eid}/photos${qs({ galleryId, status, type, page, pageSize: 60 })}`),
     placeholderData: (p) => p,
     refetchInterval: active ? 4000 : false,
   });
@@ -70,7 +70,7 @@ export function PhotosTab({ event }: { event: EventItem }) {
   const toggle = (id: string) => setSelected((cur) => { const n = new Set(cur); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const canUpload = !!user?.permissions.includes('images:upload');
   const canEdit = !!user?.permissions.includes('media:edit');
-  const shown = (photos.data?.items ?? []).filter((p) => !type || p.mediaType === type);
+  const shown = photos.data?.items ?? [];
   const uploadsOpen = ['draft', 'active'].includes(event.status);
 
   return (
@@ -101,7 +101,7 @@ export function PhotosTab({ event }: { event: EventItem }) {
             <option value="">Any status</option>
             {['ready', 'processing', 'uploaded', 'failed', 'pending_upload'].map((x) => <option key={x} value={x}>{label(x)}</option>)}
           </Select>
-          <Select className="w-36" value={type} onChange={(e) => setType(e.target.value as '' | 'image' | 'video')} aria-label="Type">
+          <Select className="w-36" value={type} onChange={(e) => { setType(e.target.value as '' | 'image' | 'video'); setPage(1); }} aria-label="Type">
             <option value="">Photos &amp; videos</option>
             <option value="image">Photos</option>
             <option value="video">Videos</option>
@@ -148,7 +148,7 @@ export function PhotosTab({ event }: { event: EventItem }) {
                 </li>
               ))}
             </ul>
-            <Pagination page={photos.data.page} pageSize={photos.data.pageSize} total={photos.data.total} onChange={setPage} />
+            <Pagination page={photos.data!.page} pageSize={photos.data!.pageSize} total={photos.data!.total} onChange={setPage} />
           </>
         ) : <EmptyState title={type || photos.data?.items.length ? 'Nothing matches this filter' : 'No photos or videos yet'} description="Upload photos and videos above. They are processed in the background." />}
       </Card>
@@ -157,7 +157,7 @@ export function PhotosTab({ event }: { event: EventItem }) {
         {open && (
           <div className="space-y-4">
             {open.previewUrl ? (open.mediaType === 'video' ? <video key={open.id} controls playsInline preload="metadata" poster={open.thumbUrl ?? undefined} src={open.previewUrl} className="max-h-[60vh] w-full rounded-lg bg-black" /> : <img src={open.previewUrl} alt={displayName(open)} className="max-h-[60vh] w-full rounded-lg object-contain" />) : <p className="rounded-lg bg-surface-2 p-8 text-center text-sm text-muted">{open.status === 'failed' ? 'Processing failed' : open.mediaType === 'video' ? 'Video is still being converted — this can take a few minutes' : 'Preview not ready yet'}</p>}
-            <MediaForm key={open.id} photo={open} canEdit={canEdit} onSaved={(p) => { setOpen(p); refresh(); }} />
+            <MediaForm key={open.id} photo={open} canEdit={canEdit} onSaved={(p) => { setOpen((cur) => (cur ? p : cur)); refresh(); }} /* never reopen a dialog the user already closed */ />
             <dl className="grid grid-cols-2 gap-2 text-sm">
               <dt className="text-muted">File</dt><dd className="break-all">{open.filename}</dd>
               <dt className="text-muted">Type</dt><dd>{open.mediaType === 'video' ? 'Video' : 'Photo'}</dd>
@@ -201,8 +201,8 @@ function MediaForm({ photo, canEdit, onSaved }: { photo: Photo; canEdit: boolean
     onError: (e) => toast.error(e.message),
   });
   const addTag = () => {
-    const t = draft.trim().replace(/,$/, '');
-    if (t && !tags.includes(t)) setTags([...tags, t]);
+    const fresh = draft.split(',').map((x) => x.trim().toLowerCase()).filter((x) => x && !tags.includes(x));
+    if (fresh.length) setTags([...tags, ...new Set(fresh)]);
     setDraft('');
   };
 

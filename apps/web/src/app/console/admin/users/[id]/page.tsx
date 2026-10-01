@@ -11,9 +11,16 @@ import { get, patch, post, type EventItem, type User } from '@/lib/api';
 import { bytes, date, label, num, relative } from '@/lib/format';
 import { AdminGate, SecretDialog } from '../../_shared';
 
-const GRANTABLE = ['events:view', 'events:create', 'events:edit', 'events:publish', 'images:upload', 'galleries:manage', 'stats:view', 'images:download'];
+const GRANTABLE = ['events:view', 'events:create', 'events:edit', 'events:publish', 'images:upload', 'galleries:manage', 'media:edit', 'collections:manage', 'stats:view', 'images:download'];
 const ADMIN_ONLY = ['users:manage', 'websites:manage', 'api:manage', 'images:delete', 'events:delete', 'settings:manage', 'audit:view'];
-const DEFAULTS = ['events:view', 'events:create', 'events:edit', 'events:publish', 'images:upload', 'galleries:manage', 'stats:view', 'images:download'];
+const PHOTOGRAPHER_DEFAULTS = ['events:view', 'events:create', 'events:edit', 'events:publish', 'images:upload', 'galleries:manage', 'media:edit', 'stats:view', 'images:download'];
+const EDITOR_DEFAULTS = ['events:view', 'events:edit', 'galleries:manage', 'media:edit', 'collections:manage', 'stats:view', 'images:download'];
+const defaultsFor = (role: string) => (role === 'editor' ? EDITOR_DEFAULTS : PHOTOGRAPHER_DEFAULTS);
+const ROLE_HELP: Record<string, string> = {
+  photographer: 'Photographer — creates, uploads to and publishes their own events.',
+  editor: 'Editor — curates events and media across all photographers: renames, tags, galleries and collections. Cannot upload, publish or delete.',
+  admin: 'Administrator — full access, including users, websites, settings and deletion.',
+};
 const GB = 1024 ** 3;
 
 interface Detail {
@@ -35,6 +42,8 @@ const PERMISSION_NAMES: Record<string, string> = {
   'events:publish': 'Publish events',
   'images:upload': 'Upload images',
   'galleries:manage': 'Manage galleries',
+  'media:edit': 'Edit media titles & descriptions',
+  'collections:manage': 'Manage collections',
   'stats:view': 'View statistics',
   'images:download': 'Download originals',
   'users:manage': 'Manage users',
@@ -70,7 +79,9 @@ function UserDetail() {
   const u = detail.data?.user;
   useEffect(() => {
     if (!u) return;
-    setPerms(GRANTABLE.filter((p) => u.permissions.includes(p)));
+    // Stored permissions are overrides on top of the role defaults; show the effective set.
+    const d = defaultsFor(u.role);
+    setPerms(GRANTABLE.filter((p) => (d.includes(p) && !u.revokedPermissions?.includes(p)) || u.permissions.includes(p)));
     setQuota(u.storageQuotaBytes ? String(+(u.storageQuotaBytes / GB).toFixed(2)) : '');
     setRole(u.role);
   }, [u]);
@@ -116,6 +127,7 @@ function UserDetail() {
   if (detail.error || !u || !detail.data) return <ErrorNote error={detail.error ?? new Error('User not found')} />;
   const { stats } = detail.data;
   const isAdmin = u.role === 'admin';
+  const DEFAULTS = defaultsFor(u.role);
   const confirmText = {
     suspended: ['Suspend user', 'The user is signed out immediately and cannot sign in until reactivated.', 'Suspend'],
     inactive: ['Deactivate user', 'The user is signed out and their account is disabled.', 'Deactivate'],
@@ -156,16 +168,18 @@ function UserDetail() {
             <dt className="text-muted">Name</dt><dd>{u.name}</dd>
             <dt className="text-muted">Email</dt><dd className="break-all">{u.email}</dd>
             <dt className="text-muted">Created</dt><dd>{date(u.createdAt, true)}</dd>
-            <dt className="text-muted">Role</dt><dd><Badge tone={isAdmin ? 'accent' : 'neutral'}>{label(u.role)}</Badge></dd>
+            <dt className="text-muted">Role</dt><dd><Badge tone={isAdmin ? 'accent' : u.role === 'editor' ? 'success' : 'neutral'}>{label(u.role)}</Badge></dd>
           </dl>
           <form className="flex items-end gap-2 border-t border-border p-5" onSubmit={(e) => { e.preventDefault(); saveRole.mutate(); }}>
             <div className="flex-1">
               <Field label="Change role">
                 <Select value={role} onChange={(e) => setRole(e.target.value)}>
-                  <option value="photographer">Photographer</option>
+                  <option value="photographer">Photographer — creates and publishes their own events</option>
+                  <option value="editor">Editor — curates events and media across all photographers</option>
                   <option value="admin">Administrator</option>
                 </Select>
               </Field>
+              <p className="mt-1.5 text-xs text-muted" aria-live="polite">{ROLE_HELP[role]}</p>
             </div>
             <Button type="submit" disabled={role === u.role} loading={saveRole.isPending}>Save role</Button>
           </form>
@@ -185,7 +199,7 @@ function UserDetail() {
       </div>
 
       <Card>
-        <CardHeader title="Permissions" description={isAdmin ? 'Administrators hold every permission.' : 'Adjust what this photographer can do. Defaults are pre-selected.'} />
+        <CardHeader title="Permissions" description={isAdmin ? 'Administrators hold every permission.' : `Adjust what this ${u.role} can do. Defaults are pre-selected.`} />
         {isAdmin ? (
           <p className="p-5 text-sm text-muted">Permissions cannot be edited for administrators.</p>
         ) : (

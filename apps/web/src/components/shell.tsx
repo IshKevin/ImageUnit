@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Activity, Aperture, Bell, CalendarDays, Globe, HardDrive, LayoutDashboard, LogOut, Menu, ScrollText, Settings, Users, X } from 'lucide-react';
+import { Activity, Aperture, Bell, CalendarDays, FolderKanban, Globe, HardDrive, LayoutDashboard, LibraryBig, LogOut, Menu, ScrollText, Settings, Users, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -23,6 +23,8 @@ const NAV: { section?: string; items: NavItem[] }[] = [
     items: [
       { href: '/console', label: 'Overview', icon: LayoutDashboard, show: () => true },
       { href: '/console/events', label: 'Events', icon: CalendarDays, show: (u) => can(u, 'events:view') },
+      { href: '/console/library', label: 'Library', icon: LibraryBig, show: (u) => can(u, 'events:view') },
+      { href: '/console/collections', label: 'Collections', icon: FolderKanban, show: (u) => can(u, 'collections:manage') },
     ],
   },
   {

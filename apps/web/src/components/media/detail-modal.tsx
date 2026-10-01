@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { EyeOff, Play } from 'lucide-react';
+import { EyeOff } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -44,14 +44,13 @@ function Body({ item, onClose, canEdit }: { item: LibraryItem; onClose: () => vo
   return (
     <div className="space-y-4">
       <div className="relative grid max-h-80 place-items-center overflow-hidden rounded-lg bg-surface-2">
-        {item.thumbUrl ? (
+        {item.mediaType === 'video' && item.previewUrl ? (
+          <video key={item.id} controls playsInline preload="metadata" poster={item.thumbUrl ?? undefined} src={item.previewUrl} className="max-h-80 w-full bg-black" />
+        ) : item.thumbUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={item.thumbUrl} alt={displayName(item)} className="max-h-80 w-full object-contain" />
+          <img src={item.previewUrl && item.mediaType === 'image' ? item.previewUrl : item.thumbUrl} alt={displayName(item)} className="max-h-80 w-full object-contain" />
         ) : (
-          <div className="grid h-48 place-items-center text-sm text-muted">Preview not ready</div>
-        )}
-        {item.mediaType === 'video' && item.thumbUrl && (
-          <span className="absolute grid size-12 place-items-center rounded-full bg-black/60 text-white"><Play className="size-6" aria-hidden /></span>
+          <div className="grid h-48 place-items-center text-sm text-muted">{item.mediaType === 'video' && item.status !== 'failed' ? 'Video is still being converted' : 'Preview not ready'}</div>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2 text-sm">
