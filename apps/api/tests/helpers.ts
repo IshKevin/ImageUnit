@@ -14,7 +14,7 @@ export const PASSWORD = 'Sup3rSecret!pass';
 let counter = 0;
 export const uniq = (p = 'x') => `${p}-${Date.now().toString(36)}-${counter++}`;
 
-export async function createTestApp() {
+export async function createTestApp(overrides: Record<string, string> = {}) {
   const config = loadConfig({
     NODE_ENV: 'test',
     DATABASE_URL: TEST_DB_URL,
@@ -25,6 +25,7 @@ export async function createTestApp() {
     SESSION_SECRET: 'test-secret-test-secret-test-secret-test-secret',
     LOG_LEVEL: 'silent',
     LOGIN_RATE_LIMIT: '100000',
+    ...overrides,
   } as NodeJS.ProcessEnv);
   const { db, pool } = createDb(config.DATABASE_URL);
   const storage = createMemoryStorage();

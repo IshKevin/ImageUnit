@@ -49,7 +49,18 @@ export async function buildApp(ctx: AppContext, opts: { rateLimitMax?: number } 
   });
 
   await app.register(helmet, { contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } });
-  await app.register(cors, { origin: [new URL(ctx.config.PUBLIC_WEB_URL).origin], credentials: true });
+  // CORS. Default: only our own web app, which may use cookies. CORS_ORIGINS=* lets any website call the API from a
+  // browser, but never with cookies (browsers forbid "*" together with credentials, and we would not want any site to
+  // act as a signed-in user): the public galleries and bearer-key website API need no credentials. A list of origins
+  // is treated like the default (credentials allowed) because those sites are explicitly trusted.
+  const webOrigin = new URL(ctx.config.PUBLIC_WEB_URL).origin;
+  const corsList = ctx.config.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
+  if (corsList.includes('*')) {
+    await app.register(cors, { origin: '*', credentials: false, methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'], maxAge: 600 });
+  } else {
+    const trusted = [webOrigin, ...corsList.map((o) => new URL(o).origin)];
+    await app.register(cors, { origin: trusted, credentials: true, methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'], maxAge: 600 });
+  }
   await app.register(cookie);
   await app.register(rateLimit, {
     global: true,

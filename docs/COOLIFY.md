@@ -17,7 +17,7 @@
 | `METRICS_TOKEN` | random string | protects `/metrics` |
 | `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD` | your admin login | first boot only; remove afterwards |
 
-Optional: `STORAGE_TOTAL_BYTES` (capacity shown in the dashboard), `MAX_UPLOAD_BYTES` (photos, default 100 MB), `MAX_VIDEO_BYTES` (videos, default 2 GB), `WORKER_CONCURRENCY` (photo processing, default 4), `WORKER_VIDEO_CONCURRENCY` (simultaneous video conversions per worker, default 1), `LOG_LEVEL`.
+Optional: `CORS_ORIGINS` (see below), `STORAGE_TOTAL_BYTES` (capacity shown in the dashboard), `MAX_UPLOAD_BYTES` (photos, default 100 MB), `MAX_VIDEO_BYTES` (videos, default 2 GB), `WORKER_CONCURRENCY` (photo processing, default 4), `WORKER_VIDEO_CONCURRENCY` (simultaneous video conversions per worker, default 1), `LOG_LEVEL`.
 `ops/gen-env.sh` prints a full set of strong values you can paste in (`make prod-env DOMAIN=example.com`, then copy from `.env.production`).
 
 ## 2. Domains (Coolify → each service → Domains)
@@ -106,3 +106,15 @@ Videos are converted by the `worker` service with a bundled ffmpeg (no system in
 * **CPU / RAM:** about 1 CPU core and 1 GB RAM per simultaneous conversion. Keep `WORKER_VIDEO_CONCURRENCY=1` on small servers; scale by adding `worker` replicas instead.
 * **Disk:** the worker needs free space in its container filesystem (`/tmp`) of roughly 2× the largest video (a 2 GB upload needs about 4 GB while it is processed). The temporary files are deleted afterwards, even when a conversion fails.
 * **Storage:** the original is kept untouched; each video also stores a smaller MP4 for playback and a poster image.
+
+## Letting other websites call the API from a browser (CORS)
+
+By default only the ImageUnit web app may call the API and load images from storage in a browser. To change that, set **`CORS_ORIGINS`** in Coolify and redeploy:
+
+| Value | Effect |
+|---|---|
+| *(empty)* | only your web app (`PUBLIC_WEB_URL`) |
+| `*` | **any website** may call the API (`/api/v1`, public galleries) and load photos/videos from storage |
+| `https://a.com,https://b.com` | exactly those sites, plus the web app |
+
+It applies to both the API and the image storage (the `s3` service reads the same variable), so a website can use `fetch()` or `<img crossorigin>` on the links the API returns. With `*` the API never allows cookies for other sites, so a stranger's page cannot act as a signed-in user; website keys (bearer tokens) and public galleries work from anywhere. Server-to-server calls never needed CORS. Keep website keys out of browser code regardless: pass the signed `urls` to the browser instead.

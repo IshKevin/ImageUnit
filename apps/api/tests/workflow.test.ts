@@ -262,8 +262,13 @@ describe('website integration', () => {
     expect((await t.app.inject({ method: 'GET', url: '/api/v1/events' })).statusCode).toBe(401);
     expect((await s.api('/api/v1/events', 'iu_live_bogus')).statusCode).toBe(401);
 
-    const list = (await s.api('/api/v1/events?pageSize=200')).json();
-    const ids = list.items.map((e: { id: string }) => e.id);
+    // The shared test database keeps growing, so read every page rather than assuming one page is enough.
+    const ids: string[] = [];
+    for (let page = 1; page <= 100; page++) {
+      const list = (await s.api(`/api/v1/events?pageSize=200&page=${page}`)).json();
+      ids.push(...list.items.map((e: { id: string }) => e.id));
+      if (ids.length >= list.total) break;
+    }
     expect(ids).toContain(s.pub.id);
     expect(ids).not.toContain(s.priv.id);
     expect(ids).not.toContain(s.draft.id);

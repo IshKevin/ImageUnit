@@ -21,6 +21,7 @@ x-app: &app
     LOG_LEVEL: ${LOG_LEVEL:-info}
     PORT: "4000"
     PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:-http://localhost:4001}
+    CORS_ORIGINS: ${CORS_ORIGINS:-}
     API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:4000}
     COOKIE_SECURE: ${COOKIE_SECURE:-}
     TRUST_PROXY: ${TRUST_PROXY:-}
@@ -118,8 +119,8 @@ services:
       - -ip.bind=0.0.0.0
       - -s3
       - -s3.port=8333
-      # Browser CORS is limited to our web app.
-      - -s3.allowedOrigins=${PUBLIC_WEB_URL:-http://localhost:4001}
+      # Browser CORS for the storage gateway: our web app by default; CORS_ORIGINS=* (or a list) opens it to other sites.
+      - -s3.allowedOrigins=${CORS_ORIGINS:-${PUBLIC_WEB_URL:-http://localhost:4001}}
       - -master.volumeSizeLimitMB=1024
     volumes: [s3data:/data]
     # Any HTTP answer (even 403 for an unsigned request) means the S3 gateway is listening.

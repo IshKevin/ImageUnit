@@ -34,6 +34,8 @@ const schema = z.object({
   WORKER_VIDEO_CONCURRENCY: z.coerce.number().int().min(1).default(1),
   FFMPEG_PATH: z.string().optional(),
   FFPROBE_PATH: z.string().optional(),
+  /** Browser origins allowed to call the API: "*" (any site), or a comma-separated list. Empty = only the web app. */
+  CORS_ORIGINS: z.string().default(''),
   API_PUBLIC_URL: z.string().url().default('http://localhost:4000'),
   TRUST_PROXY: looseBool,
   LOGIN_RATE_LIMIT: z.coerce.number().default(10),
