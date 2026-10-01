@@ -34,8 +34,10 @@ make prod-ps
 | Role | Can | Cannot |
 |---|---|---|
 | Administrator | everything, including deletion, users, websites, settings, audit | |
-| Editor | see every event; rename events; edit media titles, descriptions, tags; organise galleries; hide/show media; build collections; use the library and its bulk tools | upload, publish, delete, change an event's access settings (unless granted), manage users/websites/settings |
-| Photographer | create and publish their own events, upload, edit their own media | see or touch other photographers' events; collections; deletion |
+| Editor | see every event; **create events and invite photographers to them**; rename events; choose the cover; edit media titles, descriptions, tags; organise galleries; hide/show media; build collections; use the library and its bulk tools | upload event photos, publish, delete, change an event's access settings (unless granted), manage users/websites/settings |
+| Photographer | create and publish their own events, upload, edit their own media. **When invited to an event** (a *contributor*): see it, upload photos, videos or whole folders, and edit the titles/descriptions/tags of their own uploads | see or touch other photographers' events or uploads; change an event they were invited to; collections; deletion |
+
+**Typical flow:** an editor creates the event and invites the photographers who will cover it (Event → Team). They upload; the editor curates (names, descriptions, galleries, cover); an administrator or a user with the publish permission publishes. Invitations pick from existing photographer accounts (administrators create accounts); there is no email delivery, so invited people see an in-app notification and the event appears in their list as *Shared with you*. Removing someone ends their access immediately; what they uploaded stays in the event. Storage quotas count what each person uploaded, wherever they uploaded it.
 
 Permissions can be adjusted per user in **Users**; admin-only permissions (delete, users, websites, settings, audit) can never be granted to others.
 

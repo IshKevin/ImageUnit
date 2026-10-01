@@ -24,6 +24,7 @@ export function PhotosTab({ event }: { event: EventItem }) {
   const [open, setOpen] = useState<Photo | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const eid = event.id;
+  const contributor = event.myAccess === 'contribute';
 
   const galleries = useQuery({ queryKey: ['galleries', eid], queryFn: () => get<{ items: Gallery[] }>(`/events/${eid}/galleries`) });
   const summary = useQuery({
@@ -70,6 +71,7 @@ export function PhotosTab({ event }: { event: EventItem }) {
   const toggle = (id: string) => setSelected((cur) => { const n = new Set(cur); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const canUpload = !!user?.permissions.includes('images:upload');
   const canEdit = !!user?.permissions.includes('media:edit');
+  const canEditPhoto = (p: Photo) => (contributor ? p.uploaderId === user?.id : canEdit);
   const shown = photos.data?.items ?? [];
   const uploadsOpen = ['draft', 'active'].includes(event.status);
 
@@ -86,7 +88,7 @@ export function PhotosTab({ event }: { event: EventItem }) {
           <Badge tone="success">{s.ready} ready</Badge>
           {s.uploaded + s.processing > 0 && <Badge tone="accent"><Spinner className="mr-1 size-3" />{s.uploaded + s.processing} processing</Badge>}
           {s.pending_upload > 0 && <Badge>{s.pending_upload} awaiting upload</Badge>}
-          {s.failed > 0 && (<><Badge tone="danger">{s.failed} failed</Badge><Button size="sm" onClick={() => retryAll.mutate()} loading={retryAll.isPending}><RotateCcw className="size-3.5" /> Retry failed</Button></>)}
+          {s.failed > 0 && (<><Badge tone="danger">{s.failed} failed</Badge>{!contributor && <Button size="sm" onClick={() => retryAll.mutate()} loading={retryAll.isPending}><RotateCcw className="size-3.5" /> Retry failed</Button>}</>)}
           {active && <span className="text-muted">Processing continues in the background — you can leave this page.</span>}
         </div>
       )}
@@ -106,7 +108,7 @@ export function PhotosTab({ event }: { event: EventItem }) {
             <option value="image">Photos</option>
             <option value="video">Videos</option>
           </Select>
-          {selected.size > 0 && (
+          {!contributor && selected.size > 0 && (
             <div className="ml-auto flex flex-wrap items-center gap-2">
               <span className="text-sm text-muted">{selected.size} selected</span>
               <Select className="h-8 w-40 text-xs" value="" onChange={(e) => e.target.value && bulk.mutate({ galleryId: e.target.value })} aria-label="Move to gallery">
@@ -133,9 +135,10 @@ export function PhotosTab({ event }: { event: EventItem }) {
                       </span>
                     )}
                   </button>
-                  <button onClick={() => toggle(p.id)} aria-pressed={selected.has(p.id)} aria-label={`Select ${displayName(p)}`} className={clsx('absolute left-1.5 top-1.5 grid size-6 place-items-center rounded-full border-2 transition', selected.has(p.id) ? 'border-accent bg-accent text-accent-fg' : 'border-white/80 bg-black/30 opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}>
+                  {!contributor && <button onClick={() => toggle(p.id)} aria-pressed={selected.has(p.id)} aria-label={`Select ${displayName(p)}`} className={clsx('absolute left-1.5 top-1.5 grid size-6 place-items-center rounded-full border-2 transition', selected.has(p.id) ? 'border-accent bg-accent text-accent-fg' : 'border-white/80 bg-black/30 opacity-0 group-hover:opacity-100 focus-visible:opacity-100')}>
                     {selected.has(p.id) && <Check className="size-3.5" />}
-                  </button>
+                  </button>}
+                  {event.coverPhotoId === p.id && <span className="pointer-events-none absolute right-1.5 bottom-6"><Badge tone="accent">Cover</Badge></span>}
                   {p.mediaType === 'video' && p.thumbUrl && (
                     <span className="pointer-events-none absolute inset-0 grid place-items-center">
                       <span className="grid size-9 place-items-center rounded-full bg-black/55 text-white"><Play className="size-4 fill-current" aria-label="Video" /></span>
@@ -157,7 +160,7 @@ export function PhotosTab({ event }: { event: EventItem }) {
         {open && (
           <div className="space-y-4">
             {open.previewUrl ? (open.mediaType === 'video' ? <video key={open.id} controls playsInline preload="metadata" poster={open.thumbUrl ?? undefined} src={open.previewUrl} className="max-h-[60vh] w-full rounded-lg bg-black" /> : <img src={open.previewUrl} alt={displayName(open)} className="max-h-[60vh] w-full rounded-lg object-contain" />) : <p className="rounded-lg bg-surface-2 p-8 text-center text-sm text-muted">{open.status === 'failed' ? 'Processing failed' : open.mediaType === 'video' ? 'Video is still being converted — this can take a few minutes' : 'Preview not ready yet'}</p>}
-            <MediaForm key={open.id} photo={open} canEdit={canEdit} onSaved={(p) => { setOpen((cur) => (cur ? p : cur)); refresh(); }} /* never reopen a dialog the user already closed */ />
+            <MediaForm key={open.id} photo={open} canEdit={canEditPhoto(open)} onSaved={(p) => { setOpen((cur) => (cur ? p : cur)); refresh(); }} /* never reopen a dialog the user already closed */ />
             <dl className="grid grid-cols-2 gap-2 text-sm">
               <dt className="text-muted">File</dt><dd className="break-all">{open.filename}</dd>
               <dt className="text-muted">Type</dt><dd>{open.mediaType === 'video' ? 'Video' : 'Photo'}</dd>
@@ -168,8 +171,8 @@ export function PhotosTab({ event }: { event: EventItem }) {
             </dl>
             {open.error && <ErrorNote error={new Error(open.error)} />}
             <div className="flex flex-wrap justify-end gap-2">
-              {open.status === 'failed' && <Button onClick={() => retryOne.mutate(open.id)} loading={retryOne.isPending}><RotateCcw className="size-4" /> Retry processing</Button>}
-              {open.status === 'ready' && <Button onClick={() => setCover.mutate(open.id)}>Set as cover</Button>}
+              {open.status === 'failed' && (!contributor || open.uploaderId === user?.id) && <Button onClick={() => retryOne.mutate(open.id)} loading={retryOne.isPending}><RotateCcw className="size-4" /> Retry processing</Button>}
+              {!contributor && open.status === 'ready' && <Button onClick={() => setCover.mutate(open.id)}>Set as cover</Button>}
               {open.status !== 'pending_upload' && <Button onClick={async () => { const r = await api<{ url: string }>(`/photos/${open.id}/original`); window.open(r.url, '_blank'); }}>Download original</Button>}
             </div>
           </div>

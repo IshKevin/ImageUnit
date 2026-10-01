@@ -22,6 +22,8 @@ curl -H "Authorization: Bearer $IU_KEY" https://api.example.com/api/v1/events
 ```
 Administrators can see all of this per event in the console (**Events → an event → Developer**): the exact endpoints, copy-ready cURL/JavaScript/Python snippets, which websites can reach the event, and a "Try it" preview of the real response for any website.
 
+Event objects also carry a `cover` (the image chosen as the event's cover, or the first photograph when none is chosen): `"cover": { "thumbnail": "…", "preview": "…" }` (null without the `images:read` scope). A dedicated cover image can be hidden from the gallery, so it will not appear in `/media` lists, but its link works.
+
 Photo items include `urls.thumbnail`, `urls.preview` and (when permitted) `urls.download`; they are valid for one hour — re-request the list to refresh. Errors are `{ "error": { "code", "message" } }` with 401 (bad key), 403 (revoked/scope/origin), 404, 429 (rate limit; per-key, default 600/min).
 
 

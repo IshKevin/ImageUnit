@@ -68,7 +68,7 @@ function EventsList() {
   const canCreate = can(user, 'events:create');
   return (
     <>
-      <PageHeader title="Events" description={user?.role === 'admin' ? 'All events on the platform' : 'Your events'} actions={canCreate && <Button variant="primary" onClick={() => setCreating(true)}><Plus className="size-4" /> New event</Button>} />
+      <PageHeader title="Events" description={user?.role === 'admin' ? 'All events on the platform' : 'Your events and events shared with you'} actions={canCreate && <Button variant="primary" onClick={() => setCreating(true)}><Plus className="size-4" /> New event</Button>} />
       <Card>
         <div className="flex flex-wrap gap-3 border-b border-border p-4">
           <div className="relative min-w-52 flex-1"><Search className="pointer-events-none absolute left-3 top-3 size-4 text-muted" /><Input className="pl-9" placeholder="Search events" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search events" /></div>
@@ -80,13 +80,25 @@ function EventsList() {
         {events.isLoading ? <Loading /> : events.data?.items.length ? (
           <>
             <Table>
-              <thead><tr><Th>Event</Th><Th>Date</Th>{user?.role === 'admin' && <Th>Photographer</Th>}<Th>Photos</Th><Th>Storage</Th><Th>Expires</Th><Th>Status</Th></tr></thead>
+              <thead><tr><Th>Event</Th><Th>Date</Th><Th>Photographer</Th><Th>Photos</Th><Th>Storage</Th><Th>Expires</Th><Th>Status</Th></tr></thead>
               <tbody>
                 {events.data.items.map((e) => (
                   <tr key={e.id} className="hover:bg-surface-2">
-                    <Td><Link href={`/console/events/${e.id}`} className="font-medium hover:text-accent">{e.name}</Link><p className="text-xs text-muted">{e.location}</p></Td>
+                    <Td>
+                      <div className="flex items-center gap-3">
+                        {e.coverUrl ? <img src={e.coverUrl} alt="" loading="lazy" className="size-10 shrink-0 rounded-md object-cover" /> : <span className="size-10 shrink-0 rounded-md bg-surface-2" aria-hidden />}
+                        <div className="min-w-0">
+                          <Link href={`/console/events/${e.id}`} className="font-medium hover:text-accent">{e.name}</Link>
+                          <p className="text-xs text-muted">{e.location}</p>
+                          <div className="mt-0.5 flex flex-wrap gap-1.5">
+                            {e.myAccess === 'contribute' && <Badge tone="accent">Shared with you</Badge>}
+                            {e.myAccess !== 'contribute' && !!e.memberCount && <Badge>{e.memberCount} {e.memberCount === 1 ? 'photographer' : 'photographers'}</Badge>}
+                          </div>
+                        </div>
+                      </div>
+                    </Td>
                     <Td>{date(e.eventDate)}</Td>
-                    {user?.role === 'admin' && <Td>{e.ownerName}</Td>}
+                    <Td>{e.ownerName ?? '—'}</Td>
                     <Td className="tabular-nums">{e.readyCount}/{e.photoCount}</Td>
                     <Td>{bytes(e.storageBytes)}</Td>
                     <Td>{date(e.expiresAt)}</Td>
