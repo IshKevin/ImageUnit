@@ -6,7 +6,7 @@ import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import { Badge, Button, Card, CardHeader, ConfirmDialog, EmptyState, ErrorNote, Field, Input, Loading, Modal, PageHeader, Stat, statusTone, Table, Td, Textarea, Th } from '@/components/ui';
 import { get, patch, post, type EventItem, type Website as WebsiteSummary } from '@/lib/api';
-import { bytes, label, num, relative } from '@/lib/format';
+import { bytes, date, label, num, relative } from '@/lib/format';
 import { AdminGate, SecretDialog, TimeChart } from '../_shared';
 
 interface Website extends WebsiteSummary {
@@ -16,6 +16,7 @@ interface Website extends WebsiteSummary {
   rateLimitPerMinute: number;
   allowedEventIds: string[] | null;
   lastUsedAt: string | null;
+  revokedAt: string | null;
   createdAt: string;
 }
 type UsageRow = {
@@ -52,6 +53,7 @@ function Websites() {
   const list = useQuery({ queryKey: ['admin-websites'], queryFn: () => get<{ items: Website[] }>('/admin/websites') });
   const [creating, setCreating] = useState(false);
   const [key, setKey] = useState<{ title: string; value: string } | null>(null);
+  const [details, setDetails] = useState<Website | null>(null);
   const [revoke, setRevoke] = useState<Website | null>(null);
   const [rotate, setRotate] = useState<Website | null>(null);
   const [usage, setUsage] = useState<Website | null>(null);
@@ -104,6 +106,7 @@ function Websites() {
                   <Td className="whitespace-nowrap text-muted">{w.lastUsedAt ? relative(w.lastUsedAt) : 'Never'}</Td>
                   <Td>
                     <div className="flex justify-end gap-2">
+                      <Button size="sm" onClick={() => setDetails(w)}>Details</Button>
                       <Button size="sm" onClick={() => setUsage(w)} aria-label={`Usage for ${w.name}`}><BarChart3 className="size-4" aria-hidden /> Usage</Button>
                       {w.status !== 'revoked' && (
                         <>
@@ -124,6 +127,48 @@ function Websites() {
       </Card>
 
       <CreateWebsite open={creating} onClose={() => setCreating(false)} onCreated={(name, apiKey) => { setCreating(false); refresh(); setKey({ title: `API key for ${name}`, value: apiKey }); }} />
+      <Modal open={!!details} onClose={() => setDetails(null)} title={`Website details: ${details?.name ?? ''}`} wide>
+        {details && (
+          <dl className="grid grid-cols-[8rem_1fr] gap-y-3 text-sm">
+            <dt className="text-muted">ID</dt>
+            <dd className="break-all font-mono text-xs">{details.id}</dd>
+            <dt className="text-muted">Name</dt>
+            <dd>{details.name}</dd>
+            <dt className="text-muted">Description</dt>
+            <dd className="whitespace-pre-wrap wrap-break-word">{details.description || '—'}</dd>
+            <dt className="text-muted">Status</dt>
+            <dd><Badge tone={statusTone(details.status)}>{label(details.status)}</Badge></dd>
+            <dt className="text-muted">Key prefix</dt>
+            <dd><code className="font-mono text-xs">{details.keyPrefix}…</code></dd>
+            <dt className="text-muted">Scopes</dt>
+            <dd className="flex flex-wrap gap-1">
+              {details.scopes.map((scope) => <Badge key={scope}>{scope}</Badge>)}
+            </dd>
+            <dt className="text-muted">Event access</dt>
+            <dd className="wrap-break-word">
+              {details.allowedEventIds === null
+                ? 'All events'
+                : details.allowedEventIds.length
+                  ? details.allowedEventIds.join(', ')
+                  : 'No events'}
+            </dd>
+            <dt className="text-muted">Allowed origins</dt>
+            <dd className="wrap-break-word">
+              {details.allowedOrigins.length
+                ? details.allowedOrigins.map((origin) => <code key={origin} className="mr-2 inline-block font-mono text-xs">{origin}</code>)
+                : 'Any origin'}
+            </dd>
+            <dt className="text-muted">Rate limit</dt>
+            <dd>{details.rateLimitPerMinute.toLocaleString()} requests/min</dd>
+            <dt className="text-muted">Last used</dt>
+            <dd>{date(details.lastUsedAt, true)}</dd>
+            <dt className="text-muted">Revoked</dt>
+            <dd>{date(details.revokedAt, true)}</dd>
+            <dt className="text-muted">Created</dt>
+            <dd>{date(details.createdAt, true)}</dd>
+          </dl>
+        )}
+      </Modal>
       {eventAccess && <WebsiteEventsModal website={eventAccess} onClose={() => setEventAccess(null)} onSaved={refresh} />}
       {collectionAccess && <WebsiteCollectionsModal website={collectionAccess} onClose={() => setCollectionAccess(null)} onSaved={refresh} />}
       <SecretDialog open={!!key} onClose={() => setKey(null)} title={key?.title ?? ''} secret={key?.value ?? ''} warning="Copy this key now. It is shown only once and cannot be retrieved later." />
@@ -495,4 +540,3 @@ function WebsiteCollectionsModal({ website, onClose, onSaved }: { website: Websi
     </Modal>
   );
 }
-
