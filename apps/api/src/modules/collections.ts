@@ -1,7 +1,7 @@
-import { and, asc, count, desc, eq, ilike, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { collectionItems, collections, events, photos, type Collection } from '../db/schema.js';
+import { collectionItems, collectionWebsites, collections, events, photos, websites, type Collection } from '../db/schema.js';
 import { isUuid, makeGuards } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
@@ -39,6 +39,21 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
     throw conflict('Could not allocate a unique link for this collection');
   }
 
+  async function validateWebsites(tx: any, websiteIds: string[]) {
+    if (websiteIds.length === 0) return;
+    const found = await tx.select().from(websites).where(inArray(websites.id, websiteIds));
+    if (found.length !== websiteIds.length) {
+      throw badRequest('One or more websites do not exist');
+    }
+    for (const w of found) {
+      if (w.status && w.status !== 'active') throw badRequest('Website is not active');
+      if (w.revoked || w.disabled) throw badRequest('Cannot assign a revoked or disabled website');
+      if (w.permissions && !w.permissions.includes('collections:read')) {
+        throw badRequest('Website does not have collections:read permission');
+      }
+    }
+  }
+
   app.get('/collections', { preHandler }, async (req) => {
     const q = parse(z.object({ q: z.string().trim().max(100).optional() }), req.query);
     const rows = await ctx.db
@@ -54,10 +69,27 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post('/collections', { preHandler }, async (req, reply) => {
-    const body = parse(z.object({ name: z.string().trim().min(2).max(160), description: z.string().max(5000).default('') }), req.body);
+    const body = parse(
+      z.object({
+        name: z.string().trim().min(2).max(160),
+        description: z.string().max(5000).default(''),
+        websiteIds: z.array(z.string().uuid()).default([]),
+      }),
+      req.body,
+    );
     const slug = await uniqueSlug(body.name);
     const created = await ctx.db.transaction(async (tx) => {
-      const [row] = await tx.insert(collections).values({ ...body, slug, createdBy: req.user!.id }).returning();
+      await validateWebsites(tx, body.websiteIds);
+      const { websiteIds, ...collectionData } = body;
+      const [row] = await tx.insert(collections).values({ ...collectionData, slug, createdBy: req.user!.id }).returning();
+      if (websiteIds.length > 0) {
+        await tx.insert(collectionWebsites).values(
+          websiteIds.map((clientId) => ({
+            collectionId: row!.id,
+            clientId,
+          })),
+        );
+      }
       await audit(tx, actorFromRequest(req), { action: 'collection.created', entityType: 'collection', entityId: row!.id, after: dto(row!) });
       return row!;
     });
@@ -79,11 +111,11 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
         status: z.enum(['draft', 'published']),
         slug: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/).min(2).max(80),
         coverPhotoId: z.string().uuid().nullable(),
+        websiteIds: z.array(z.string().uuid()).optional(),
       }).partial(),
       req.body,
     );
     const c = await load((req.params as { id: string }).id);
-    // The slug is part of the address websites use; once published it must not move.
     if (body.slug && body.slug !== c.slug) {
       if (c.status === 'published') throw conflict('Unpublish the collection before changing its link');
       const [hit] = await ctx.db.select({ id: collections.id }).from(collections).where(eq(collections.slug, body.slug));
@@ -94,7 +126,26 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
       if (!m) throw badRequest('The cover must be an item of this collection');
     }
     const updated = await ctx.db.transaction(async (tx) => {
-      const [row] = await tx.update(collections).set(body).where(eq(collections.id, c.id)).returning();
+      if (body.websiteIds !== undefined) {
+        await validateWebsites(tx, body.websiteIds);
+      }
+      const { websiteIds, ...collectionUpdates } = body;
+      const [row] = Object.keys(collectionUpdates).length > 0
+        ? await tx.update(collections).set(collectionUpdates).where(eq(collections.id, c.id)).returning()
+        : [c];
+
+      if (websiteIds !== undefined) {
+        await tx.delete(collectionWebsites).where(eq(collectionWebsites.collectionId, c.id));
+        if (websiteIds.length > 0) {
+          await tx.insert(collectionWebsites).values(
+            websiteIds.map((clientId) => ({
+              collectionId: c.id,
+              clientId,
+            })),
+          );
+        }
+      }
+
       await audit(tx, actorFromRequest(req), {
         action: body.status && body.status !== c.status ? (body.status === 'published' ? 'collection.published' : 'collection.unpublished') : 'collection.updated',
         entityType: 'collection', entityId: c.id, before: dto(c), after: dto(row!),
@@ -106,7 +157,6 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete('/collections/:id', { preHandler }, async (req, reply) => {
     const c = await load((req.params as { id: string }).id);
-    // Only the grouping is removed; the media itself is untouched.
     await ctx.db.transaction(async (tx) => {
       await tx.delete(collections).where(eq(collections.id, c.id));
       await audit(tx, actorFromRequest(req), { action: 'collection.deleted', entityType: 'collection', entityId: c.id, before: dto(c) });
@@ -130,7 +180,6 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
     return { items: await Promise.all(rows.map(({ p, e }) => itemView(p, e))), total, page, pageSize };
   });
 
-  /** Add items by id, or everything matching a search ("add all 1,284 results"). Adding twice is harmless. */
   app.post('/collections/:id/items', { preHandler }, async (req) => {
     const { selection } = parse(z.object({ selection: selectionSchema }), req.body);
     const c = await load((req.params as { id: string }).id);
@@ -169,7 +218,6 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
     return { removed };
   });
 
-  /** Puts the given items first, in this order; everything else keeps its relative order after them. */
   app.post('/collections/:id/items/reorder', { preHandler }, async (req) => {
     const { ids } = parse(z.object({ ids: z.array(z.string().uuid()).min(1).max(5000) }), req.body);
     const c = await load((req.params as { id: string }).id);

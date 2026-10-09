@@ -239,6 +239,26 @@ export const collectionItems = pgTable(
   (t) => [primaryKey({ columns: [t.collectionId, t.photoId] }), index('collection_items_photo_idx').on(t.photoId), index('collection_items_order_idx').on(t.collectionId, t.sortOrder)],
 );
 
+export const collectionWebsites = pgTable(
+  'collection_websites',
+  {
+    collectionId: uuid('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+
+    clientId: uuid('client_id')
+      .notNull()
+      .references(() => apiClients.id, { onDelete: 'cascade' }),
+
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.collectionId, t.clientId],
+    }),
+  ],
+);
+
 export const apiClients = pgTable(
   'api_clients',
   {
@@ -348,3 +368,4 @@ export type Gallery = typeof galleries.$inferSelect;
 export type Photo = typeof photos.$inferSelect;
 export type ApiClient = typeof apiClients.$inferSelect;
 export type Collection = typeof collections.$inferSelect;
+

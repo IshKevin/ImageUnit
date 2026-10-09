@@ -191,3 +191,19 @@ export interface MemberCandidate {
   name: string;
   email: string;
 }
+
+export interface Collection {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  status: 'draft' | 'published';
+  coverPhotoId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  itemCount?: number;
+  coverUrl?: string | null;
+  thumbnail?: string | null;
+  websiteIds?: string[];
+  apiUrl?: string;
+}

@@ -1,5 +1,5 @@
-import { and, asc, count, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
-import { collectionItems, collections, users } from '../db/schema.js';
+import { and, asc, count, eq, exists, inArray, ne, sql, type SQL } from 'drizzle-orm';
+import { collectionItems, collectionWebsites, collections, users } from '../db/schema.js';
 import { hasTag, publiclyVisibleMedia, textSearch } from './media-query.js';
 import { downloadName } from './media.js';
 import type { AppContext } from '../context.js';
@@ -120,6 +120,25 @@ export function createWebsiteViews(ctx: AppContext) {
    */
   async function mediaOf(client: ApiClient, f: MediaFilters = {}) {
     const { limit, offset, page, pageSize } = pageParams(f);
+    if (f.collectionId) {
+      const assignedToClient = exists(
+        ctx.db
+          .select()
+          .from(collectionWebsites)
+          .where(
+            and(
+              eq(collectionWebsites.collectionId, collections.id),
+              eq(collectionWebsites.clientId, client.id),
+            ),
+          ),
+      );
+      const [col] = await ctx.db
+        .select({ id: collections.id })
+        .from(collections)
+        .where(and(eq(collections.id, f.collectionId), eq(collections.status, 'published'), assignedToClient));
+      if (!col) throw notFound('Collection not found');
+    }
+
     const conds: SQL[] = [...publiclyVisibleMedia(sql`${galleries.isVisible}`)];
     if (client.allowedEventIds?.length) conds.push(inArray(events.id, client.allowedEventIds));
     if (f.eventId) conds.push(eq(events.id, f.eventId));
@@ -166,10 +185,10 @@ export function createWebsiteViews(ctx: AppContext) {
         downloadName: downloadName(p),
         urls: canImages
           ? {
-              thumbnail: mediaUrl(client, p.id, 'thumbnail'),
-              preview: mediaUrl(client, p.id, 'preview'),
-              download: canDownload && effectiveDownloadPolicy(e, g, p) !== 'disabled' ? mediaUrl(client, p.id, 'download') : null,
-            }
+            thumbnail: mediaUrl(client, p.id, 'thumbnail'),
+            preview: mediaUrl(client, p.id, 'preview'),
+            download: canDownload && effectiveDownloadPolicy(e, g, p) !== 'disabled' ? mediaUrl(client, p.id, 'download') : null,
+          }
           : null,
       })),
       total,
@@ -179,19 +198,73 @@ export function createWebsiteViews(ctx: AppContext) {
   }
 
   // ---- collections ----
-  async function loadCollection(idOrSlug: string) {
+  async function effectiveCollectionCoverId(client: ApiClient, c: { id: string; coverPhotoId: string | null }): Promise<string | null> {
+    if (!client.scopes.includes('images:read')) return null;
+    if (c.coverPhotoId) {
+      const res = await mediaOf(client, { collectionId: c.id, id: c.coverPhotoId, pageSize: 1 });
+      if (res.items.length > 0) return c.coverPhotoId;
+    }
+    const res = await mediaOf(client, { collectionId: c.id, pageSize: 1 });
+    return res.items[0]?.id ?? null;
+  }
+
+  async function collectionJson(c: typeof collections.$inferSelect, client: ApiClient) {
+    const coverId = await effectiveCollectionCoverId(client, c);
+    const mediaCount = (await mediaOf(client, { collectionId: c.id, pageSize: 1 })).total;
+    return {
+      id: c.id,
+      slug: c.slug,
+      name: c.name,
+      description: c.description,
+      mediaCount,
+      thumbnail: coverId ? mediaUrl(client, coverId, 'thumbnail') : null,
+    };
+  }
+
+  function assignedCollectionCondition(clientId: string) {
+    return exists(
+      ctx.db
+        .select()
+        .from(collectionWebsites)
+        .where(
+          and(
+            eq(collectionWebsites.collectionId, collections.id),
+            eq(collectionWebsites.clientId, clientId),
+          ),
+        ),
+    );
+  }
+
+  async function loadCollection(client: ApiClient, idOrSlug: string) {
     const where = isUuid(idOrSlug) ? eq(collections.id, idOrSlug) : eq(collections.slug, idOrSlug.toLowerCase());
-    const [c] = await ctx.db.select().from(collections).where(and(where, eq(collections.status, 'published')));
+    const [c] = await ctx.db
+      .select()
+      .from(collections)
+      .where(
+        and(
+          where,
+          eq(collections.status, 'published'),
+          assignedCollectionCondition(client.id),
+        ),
+      );
     if (!c) throw notFound('Collection not found');
-    return c;
+    const base = await collectionJson(c, client);
+    return {
+      ...base,
+      mediaUrl: `/api/v1/collections/${c.slug}/media`,
+    };
   }
 
   async function listCollections(client: ApiClient, query: { page?: number; pageSize?: number }) {
     const { limit, offset, page, pageSize } = pageParams(query);
-    const rows = await ctx.db.select().from(collections).where(eq(collections.status, 'published')).orderBy(asc(collections.name)).limit(limit).offset(offset);
-    const [{ total } = { total: 0 }] = await ctx.db.select({ total: count() }).from(collections).where(eq(collections.status, 'published'));
+    const collectionWhere = and(
+      eq(collections.status, 'published'),
+      assignedCollectionCondition(client.id),
+    );
+    const rows = await ctx.db.select().from(collections).where(collectionWhere).orderBy(asc(collections.name)).limit(limit).offset(offset);
+    const [{ total } = { total: 0 }] = await ctx.db.select({ total: count() }).from(collections).where(collectionWhere);
     // Counts only include what this credential may actually see.
-    const items = await Promise.all(rows.map(async (c) => ({ id: c.id, slug: c.slug, name: c.name, description: c.description, mediaCount: (await mediaOf(client, { collectionId: c.id, pageSize: 1 })).total })));
+    const items = await Promise.all(rows.map((c) => collectionJson(c, client)));
     return { items, total, page, pageSize };
   }
 

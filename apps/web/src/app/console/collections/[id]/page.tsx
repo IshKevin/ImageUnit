@@ -6,11 +6,11 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Badge, Button, Card, CardHeader, ConfirmDialog, EmptyState, ErrorNote, Field, Input, Loading, PageHeader, Tabs, Textarea, statusTone } from '@/components/ui';
+import { Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, EmptyState, ErrorNote, Field, Input, Loading, PageHeader, Tabs, Textarea, statusTone } from '@/components/ui';
 import { MediaBrowser } from '@/components/media-browser';
 import { BigModal } from '@/components/media/parts';
-import { CopyButton } from '../../admin/_shared';
-import { get, patch, post, del, type Collection, type Selection } from '@/lib/api';
+import { CopyButton } from '../../../admin/_shared';
+import { get, patch, post, del, type Collection, type Selection, type Website } from '@/lib/api';
 import { can, useMe } from '@/lib/auth';
 import { label } from '@/lib/format';
 
@@ -138,11 +138,18 @@ function AddMedia({ open, onClose, collectionId, onAdded }: { open: boolean; onC
   );
 }
 
-function Details({ c, saving, onSave }: { c: Collection; saving: boolean; onSave: (b: Record<string, unknown>) => void }) {
+function Details({ c, saving, onSave }: { c: Collection & { websiteIds?: string[] }; saving: boolean; onSave: (b: Record<string, unknown>) => void }) {
   const [name, setName] = useState(c.name);
   const [description, setDescription] = useState(c.description);
   const [slug, setSlug] = useState(c.slug);
+  const [websiteIds, setWebsiteIds] = useState<string[]>(c.websiteIds ?? []);
   const draft = c.status === 'draft';
+
+  const websites = useQuery({
+    queryKey: ['admin-websites'],
+    queryFn: () => get<{ items: Website[] }>('/admin/websites'),
+  });
+
   return (
     <Card className="max-w-2xl">
       <CardHeader title="Details" />
@@ -150,13 +157,32 @@ function Details({ c, saving, onSave }: { c: Collection; saving: boolean; onSave
         className="space-y-4 p-5"
         onSubmit={(e) => {
           e.preventDefault();
-          onSave({ name: name.trim(), description, ...(draft && slug !== c.slug ? { slug } : {}) });
+          onSave({ name: name.trim(), description, websiteIds, ...(draft && slug !== c.slug ? { slug } : {}) });
         }}
       >
         <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} required minLength={2} maxLength={160} /></Field>
         <Field label="Description"><Textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={5000} /></Field>
         <Field label="Link (slug)" hint={draft ? 'Lowercase letters, numbers and hyphens. Websites use this in the URL, so choose it before publishing.' : 'The link cannot change after publishing, because websites already depend on it. Unpublish first to change it.'}>
           <Input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} disabled={!draft} pattern="[a-z0-9]+(-[a-z0-9]+)*" minLength={2} maxLength={80} />
+        </Field>
+        <Field label="Websites" hint="Select which websites can access this collection.">
+          {websites.isLoading ? (
+            <Loading />
+          ) : (
+            <div className="space-y-2 max-h-48 overflow-y-auto rounded-lg border border-border p-3">
+              {websites.data?.items.map((w) => (
+                <label key={w.id} className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={websiteIds.includes(w.id)}
+                    onCheckedChange={(checked) => {
+                      setWebsiteIds(checked ? [...websiteIds, w.id] : websiteIds.filter((id) => id !== w.id));
+                    }}
+                  />
+                  <span>{w.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </Field>
         <div className="flex justify-end"><Button type="submit" variant="primary" loading={saving}>Save changes</Button></div>
       </form>

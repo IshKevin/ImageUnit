@@ -6,9 +6,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { Badge, Button, Card, EmptyState, ErrorNote, Field, Input, Loading, Modal, PageHeader, Textarea, statusTone } from '@/components/ui';
+import { Badge, Button, Card, Checkbox, EmptyState, ErrorNote, Field, Input, Loading, Modal, PageHeader, Textarea, statusTone } from '@/components/ui';
 import { useDebounced } from '@/components/media/parts';
-import { get, post, qs, type Collection } from '@/lib/api';
+import { get, post, qs, type Collection, type Website } from '@/lib/api';
 import { can, useMe } from '@/lib/auth';
 import { label, relative } from '@/lib/format';
 
@@ -20,10 +20,18 @@ export default function CollectionsPage() {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [websiteIds, setWebsiteIds] = useState<string[]>([]);
   const allowed = can(user, 'collections:manage');
+
+  const websites = useQuery({
+    queryKey: ['admin-websites'],
+    queryFn: () => get<{ items: Website[] }>('/admin/websites'),
+    enabled: creating,
+  });
+
   const list = useQuery({ queryKey: ['collections', dq], queryFn: () => get<{ items: Collection[] }>(`/collections${qs({ q: dq })}`), enabled: allowed, placeholderData: (p) => p });
   const create = useMutation({
-    mutationFn: () => post<{ collection: Collection }>('/collections', { name: name.trim(), description }),
+    mutationFn: () => post<{ collection: Collection }>('/collections', { name: name.trim(), description, websiteIds }),
     onSuccess: (r) => { toast.success('Collection created'); router.push(`/console/collections/${r.collection.id}`); },
     onError: (e) => toast.error(e.message),
   });
@@ -71,6 +79,25 @@ export default function CollectionsPage() {
         <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
           <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} required minLength={2} maxLength={160} autoFocus /></Field>
           <Field label="Description" hint="Optional. Returned to the website with the collection."><Textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={5000} /></Field>
+          <Field label="Websites" hint="Select which websites can access this collection.">
+            {websites.isLoading ? (
+              <Loading />
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto rounded-lg border border-border p-3">
+                {websites.data?.items.map((w) => (
+                  <label key={w.id} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={websiteIds.includes(w.id)}
+                      onCheckedChange={(checked) => {
+                        setWebsiteIds(checked ? [...websiteIds, w.id] : websiteIds.filter((id) => id !== w.id));
+                      }}
+                    />
+                    <span>{w.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </Field>
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setCreating(false)}>Cancel</Button>
             <Button type="submit" variant="primary" loading={create.isPending} disabled={name.trim().length < 2}>Create</Button>
