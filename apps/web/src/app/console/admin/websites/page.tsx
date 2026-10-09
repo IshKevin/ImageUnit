@@ -5,19 +5,16 @@ import { BarChart3, Plus } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import { Badge, Button, Card, CardHeader, ConfirmDialog, EmptyState, ErrorNote, Field, Input, Loading, Modal, PageHeader, Stat, statusTone, Table, Td, Textarea, Th } from '@/components/ui';
-import { get, patch, post } from '@/lib/api';
+import { get, patch, post, type EventItem, type Website as WebsiteSummary } from '@/lib/api';
 import { bytes, label, num, relative } from '@/lib/format';
 import { AdminGate, SecretDialog, TimeChart } from '../_shared';
 
-interface Website {
-  id: string;
-  name: string;
+interface Website extends WebsiteSummary {
   description: string;
   keyPrefix: string;
-  scopes: string[];
   allowedOrigins: string[];
   rateLimitPerMinute: number;
-  status: 'active' | 'disabled' | 'revoked';
+  allowedEventIds: string[] | null;
   lastUsedAt: string | null;
   createdAt: string;
 }
@@ -29,6 +26,18 @@ type UsageRow = {
 };
 const SCOPES = ['events:read', 'galleries:read', 'images:read', 'downloads:read', 'collections:read'];
 const SCOPE_LABELS: Record<string, string> = { 'collections:read': 'Collections' };
+const EVENT_PAGE_SIZE = 200;
+
+async function loadEvents() {
+  const first = await get<{ items: EventItem[]; total: number }>(`/events?page=1&pageSize=${EVENT_PAGE_SIZE}`);
+  const pages = Math.ceil(first.total / EVENT_PAGE_SIZE);
+  const rest = await Promise.all(
+    Array.from({ length: Math.max(0, pages - 1) }, (_, index) =>
+      get<{ items: EventItem[] }>(`/events?page=${index + 2}&pageSize=${EVENT_PAGE_SIZE}`),
+    ),
+  );
+  return [...first.items, ...rest.flatMap((page) => page.items)];
+}
 
 export default function WebsitesPage() {
   return (
@@ -46,6 +55,7 @@ function Websites() {
   const [revoke, setRevoke] = useState<Website | null>(null);
   const [rotate, setRotate] = useState<Website | null>(null);
   const [usage, setUsage] = useState<Website | null>(null);
+  const [eventAccess, setEventAccess] = useState<Website | null>(null);
   const refresh = () => qc.invalidateQueries({ queryKey: ['admin-websites'] });
   const fail = (e: unknown) => toast.error(e instanceof Error ? e.message : 'Request failed');
 
@@ -69,7 +79,7 @@ function Websites() {
     <div>
       <PageHeader
         title="Websites"
-        description="Client websites that read published galleries through the public API."
+        description="Manage website API keys, event access, and access to assigned collections."
         actions={<Button variant="primary" onClick={() => setCreating(true)}><Plus className="size-4" aria-hidden /> New website</Button>}
       />
       <Card>
@@ -96,6 +106,7 @@ function Websites() {
                       <Button size="sm" onClick={() => setUsage(w)} aria-label={`Usage for ${w.name}`}><BarChart3 className="size-4" aria-hidden /> Usage</Button>
                       {w.status !== 'revoked' && (
                         <>
+                          <Button size="sm" onClick={() => setEventAccess(w)}>Events</Button>
                           <Button size="sm" onClick={() => toggle.mutate(w)} disabled={toggle.isPending}>{w.status === 'active' ? 'Disable' : 'Enable'}</Button>
                           <Button size="sm" onClick={() => setRotate(w)}>Rotate key</Button>
                           <Button size="sm" variant="danger" onClick={() => setRevoke(w)}>Revoke</Button>
@@ -111,6 +122,7 @@ function Websites() {
       </Card>
 
       <CreateWebsite open={creating} onClose={() => setCreating(false)} onCreated={(name, apiKey) => { setCreating(false); refresh(); setKey({ title: `API key for ${name}`, value: apiKey }); }} />
+      {eventAccess && <WebsiteEventsModal website={eventAccess} onClose={() => setEventAccess(null)} onSaved={refresh} />}
       <SecretDialog open={!!key} onClose={() => setKey(null)} title={key?.title ?? ''} secret={key?.value ?? ''} warning="Copy this key now. It is shown only once and cannot be retrieved later." />
       <ConfirmDialog open={!!rotate} onClose={() => setRotate(null)} title="Rotate API key" message={`The current key for ${rotate?.name} stops working immediately. A new key will be shown once.`} confirmLabel="Rotate key" loading={doRotate.isPending} onConfirm={() => rotate && doRotate.mutate(rotate)} />
       <ConfirmDialog open={!!revoke} onClose={() => setRevoke(null)} title="Revoke access" message={`Revoking ${revoke?.name} is irreversible. To restore access you must create a new website credential.`} confirmLabel="Revoke" danger loading={doRevoke.isPending} onConfirm={() => revoke && doRevoke.mutate(revoke)} />
@@ -141,14 +153,23 @@ function Usage({ id }: { id: string }) {
 }
 
 function CreateWebsite({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (name: string, apiKey: string) => void }) {
-  const blank = { name: '', description: '', scopes: ['events:read', 'galleries:read', 'images:read'], origins: '', rate: '600' };
+  const blank = { name: '', description: '', scopes: ['events:read', 'galleries:read', 'images:read', 'collections:read'], origins: '', rate: '600' };
   const [f, setF] = useState(blank);
+  const [allEvents, setAllEvents] = useState(true);
+  const [eventIds, setEventIds] = useState<string[]>([]);
   const m = useMutation({
     mutationFn: () => {
       const origins = f.origins.split(/[\s,]+/).filter(Boolean);
-      return post<{ website: Website; apiKey: string }>('/admin/websites', { name: f.name.trim(), description: f.description, scopes: f.scopes, allowedOrigins: origins, rateLimitPerMinute: Number(f.rate) });
+      return post<{ website: Website; apiKey: string }>('/admin/websites', {
+        name: f.name.trim(),
+        description: f.description,
+        scopes: f.scopes,
+        allowedEventIds: allEvents ? null : eventIds,
+        allowedOrigins: origins,
+        rateLimitPerMinute: Number(f.rate),
+      });
     },
-    onSuccess: (r) => { toast.success('Website created'); setF(blank); onCreated(r.website.name, r.apiKey); },
+    onSuccess: (r) => { toast.success('Website created'); setF(blank); setAllEvents(true); setEventIds([]); onCreated(r.website.name, r.apiKey); },
   });
   const submit = (e: FormEvent) => { e.preventDefault(); m.mutate(); };
   return (
@@ -156,6 +177,7 @@ function CreateWebsite({ open, onClose, onCreated }: { open: boolean; onClose: (
       <form onSubmit={submit} className="space-y-4">
         <Field label="Name"><Input required minLength={2} maxLength={120} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
         <Field label="Description"><Textarea maxLength={500} className="min-h-16" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
+        <EventAccessPicker enabled={open} allEvents={allEvents} eventIds={eventIds} onAllEventsChange={setAllEvents} onEventIdsChange={setEventIds} />
         <fieldset>
           <legend className="mb-1.5 text-sm font-medium">Scopes</legend>
           <div className="grid grid-cols-2 gap-2">
@@ -167,6 +189,7 @@ function CreateWebsite({ open, onClose, onCreated }: { open: boolean; onClose: (
             ))}
           </div>
         </fieldset>
+        <p className="text-xs text-muted">Collections assigned to this website are listed at <code>/api/v1/collections</code>. Enable <code>images:read</code> to receive signed thumbnails.</p>
         <Field label="Allowed origins (optional)" hint="Comma or space separated, e.g. https://example.com"><Input value={f.origins} onChange={(e) => setF({ ...f, origins: e.target.value })} /></Field>
         <Field label="Rate limit (requests per minute)" hint="10 to 100,000."><Input type="number" min={10} max={100000} required value={f.rate} onChange={(e) => setF({ ...f, rate: e.target.value })} /></Field>
         <ErrorNote error={m.error} />
@@ -175,6 +198,71 @@ function CreateWebsite({ open, onClose, onCreated }: { open: boolean; onClose: (
           <Button type="submit" variant="primary" loading={m.isPending} disabled={!f.scopes.length}>Create website</Button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+function EventAccessPicker({
+  enabled,
+  allEvents,
+  eventIds,
+  onAllEventsChange,
+  onEventIdsChange,
+}: {
+  enabled: boolean;
+  allEvents: boolean;
+  eventIds: string[];
+  onAllEventsChange: (value: boolean) => void;
+  onEventIdsChange: (ids: string[]) => void;
+}) {
+  const events = useQuery({ queryKey: ['website-event-choices'], queryFn: loadEvents, enabled });
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium">Event access</legend>
+      <p className="text-xs text-muted">This limits which events’ media the website can read, including media in its assigned collections.</p>
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" className="size-4 accent-[var(--accent)]" checked={allEvents} onChange={(e) => onAllEventsChange(e.target.checked)} />
+        All events (no event restriction)
+      </label>
+      {!allEvents && (
+        <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-border p-3">
+          {events.isLoading ? <Loading /> : events.error ? <ErrorNote error={events.error} /> : events.data?.length ? events.data.map((event) => (
+            <label key={event.id} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="size-4 accent-[var(--accent)]"
+                checked={eventIds.includes(event.id)}
+                onChange={(e) => onEventIdsChange(e.target.checked ? [...eventIds, event.id] : eventIds.filter((id) => id !== event.id))}
+              />
+              <span>{event.name}</span>
+              <span className="text-xs text-muted">{label(event.status)}</span>
+            </label>
+          )) : <p className="text-sm text-muted">No events available.</p>}
+        </div>
+      )}
+      {!allEvents && eventIds.length === 0 && <p className="text-xs text-warning">No events selected. This website will not be able to read event media.</p>}
+    </fieldset>
+  );
+}
+
+function WebsiteEventsModal({ website, onClose, onSaved }: { website: Website; onClose: () => void; onSaved: () => void }) {
+  const [allEvents, setAllEvents] = useState(website.allowedEventIds === null);
+  const [eventIds, setEventIds] = useState(website.allowedEventIds ?? []);
+  const update = useMutation({
+    mutationFn: () => patch(`/admin/websites/${website.id}`, { allowedEventIds: allEvents ? null : eventIds }),
+    onSuccess: () => { toast.success('Event access updated'); onSaved(); onClose(); },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Request failed'),
+  });
+
+  return (
+    <Modal open onClose={onClose} title={`Event access: ${website.name}`}>
+      <div className="space-y-4">
+        <EventAccessPicker enabled allEvents={allEvents} eventIds={eventIds} onAllEventsChange={setAllEvents} onEventIdsChange={setEventIds} />
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" loading={update.isPending} onClick={() => update.mutate()}>Save event access</Button>
+        </div>
+      </div>
     </Modal>
   );
 }

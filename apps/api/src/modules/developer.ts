@@ -48,7 +48,7 @@ export const developerRoutes: FastifyPluginAsync = async (app) => {
       websites: clients.map((c) => ({
         ...clientDto(c),
         // Whether this credential can currently reach this event at all.
-        canAccess: state.exposed && c.status === 'active' && (!c.allowedEventIds?.length || c.allowedEventIds.includes(ev.id)),
+        canAccess: state.exposed && c.status === 'active' && (c.allowedEventIds === null || c.allowedEventIds.includes(ev.id)),
       })),
     };
   });
@@ -87,4 +87,3 @@ export const developerRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 };
-

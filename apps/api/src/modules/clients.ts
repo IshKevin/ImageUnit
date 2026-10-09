@@ -41,7 +41,7 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
       z.object({
         name: z.string().trim().min(2).max(120),
         description: z.string().max(500).default(''),
-        scopes: scopeList.default(['events:read', 'galleries:read', 'images:read']),
+        scopes: scopeList.default(['events:read', 'galleries:read', 'images:read', 'collections:read']),
         allowedEventIds: z.array(z.string().uuid()).nullable().default(null),
         allowedOrigins: origins.default([]),
         rateLimitPerMinute: z.number().int().min(10).max(100_000).default(600),

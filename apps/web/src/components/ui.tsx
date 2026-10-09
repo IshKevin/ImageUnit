@@ -32,6 +32,16 @@ const field = 'w-full rounded-lg border border-border bg-surface px-3 text-sm pl
 export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={clsx(field, 'h-10', className)} {...rest} />;
 }
+export function Checkbox({ className, onCheckedChange, ...rest }: Omit<InputHTMLAttributes<HTMLInputElement>, 'type' | 'onChange'> & { onCheckedChange?: (checked: boolean) => void }) {
+  return (
+    <input
+      type="checkbox"
+      className={clsx('size-4 accent-[var(--accent)]', className)}
+      onChange={(event) => onCheckedChange?.(event.currentTarget.checked)}
+      {...rest}
+    />
+  );
+}
 export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea className={clsx(field, 'min-h-24 py-2', className)} {...rest} />;
 }
