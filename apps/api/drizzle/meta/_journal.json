@@ -36,6 +36,13 @@
       "when": 1790851950197,
       "tag": "0004_event_members",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791543005503,
+      "tag": "0005_collection_websites",
+      "breakpoints": true
     }
   ]
 }

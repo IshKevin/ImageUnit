@@ -1,7 +1,8 @@
 import { and, asc, count, desc, eq, ilike, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { collectionItems, collectionWebsites, collections, events, photos, websites, type Collection } from '../db/schema.js';
+import { apiClients, collectionItems, collectionWebsites, collections, events, photos, type Collection } from '../db/schema.js';
+import type { Tx } from '../db/client.js';
 import { isUuid, makeGuards } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
@@ -10,6 +11,8 @@ import { filterSchema, libraryConds, resolveSelection, selectionSchema, sortSche
 import { createItemView } from '../lib/library-view.js';
 import { slugify } from '../lib/slug.js';
 import { uuidSet } from '../lib/sql.js';
+
+const websiteIdsSchema = z.array(z.string().uuid()).refine((ids) => new Set(ids).size === ids.length, 'Website IDs must be unique');
 
 /** Collections: curated, named sets of media (any mix of events) that company websites can fetch by slug. */
 export const collectionRoutes: FastifyPluginAsync = async (app) => {
@@ -39,18 +42,16 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
     throw conflict('Could not allocate a unique link for this collection');
   }
 
-  async function validateWebsites(tx: any, websiteIds: string[]) {
+  async function validateWebsites(tx: Tx, websiteIds: string[]) {
     if (websiteIds.length === 0) return;
-    const found = await tx.select().from(websites).where(inArray(websites.id, websiteIds));
-    if (found.length !== websiteIds.length) {
+    const uniqueIds = [...new Set(websiteIds)];
+    const found = await tx.select().from(apiClients).where(inArray(apiClients.id, uniqueIds));
+    if (found.length !== uniqueIds.length) {
       throw badRequest('One or more websites do not exist');
     }
     for (const w of found) {
-      if (w.status && w.status !== 'active') throw badRequest('Website is not active');
-      if (w.revoked || w.disabled) throw badRequest('Cannot assign a revoked or disabled website');
-      if (w.permissions && !w.permissions.includes('collections:read')) {
-        throw badRequest('Website does not have collections:read permission');
-      }
+      if (w.status !== 'active') throw badRequest('Website is not active');
+      if (!w.scopes.includes('collections:read')) throw badRequest('Website does not have collections:read scope');
     }
   }
 
@@ -73,7 +74,7 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
       z.object({
         name: z.string().trim().min(2).max(160),
         description: z.string().max(5000).default(''),
-        websiteIds: z.array(z.string().uuid()).default([]),
+        websiteIds: websiteIdsSchema.default([]),
       }),
       req.body,
     );
@@ -99,8 +100,17 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/collections/:id', { preHandler }, async (req) => {
     const c = await load((req.params as { id: string }).id);
-    const [{ n } = { n: 0 }] = await ctx.db.select({ n: count() }).from(collectionItems).where(eq(collectionItems.collectionId, c.id));
-    return { collection: dto(c, { itemCount: n, apiUrl: `${ctx.config.API_PUBLIC_URL}/api/v1/collections/${c.slug}` }) };
+    const [[{ n } = { n: 0 }], websites] = await Promise.all([
+      ctx.db.select({ n: count() }).from(collectionItems).where(eq(collectionItems.collectionId, c.id)),
+      ctx.db.select({ clientId: collectionWebsites.clientId }).from(collectionWebsites).where(eq(collectionWebsites.collectionId, c.id)),
+    ]);
+    return {
+      collection: dto(c, {
+        itemCount: n,
+        websiteIds: websites.map(({ clientId }) => clientId),
+        apiUrl: `${ctx.config.API_PUBLIC_URL}/api/v1/collections/${c.slug}`,
+      }),
+    };
   });
 
   app.patch('/collections/:id', { preHandler }, async (req) => {
@@ -111,7 +121,7 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
         status: z.enum(['draft', 'published']),
         slug: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/).min(2).max(80),
         coverPhotoId: z.string().uuid().nullable(),
-        websiteIds: z.array(z.string().uuid()).optional(),
+        websiteIds: websiteIdsSchema.optional(),
       }).partial(),
       req.body,
     );

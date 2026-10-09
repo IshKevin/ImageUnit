@@ -127,13 +127,12 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
   );
 
   app.get('/v1/collections/:id', { preHandler: authenticate('collections:read') }, async (req) => {
-    const c = await views.loadCollection((req.params as { id: string }).id);
-    const { total } = await views.mediaOf(req.apiClient!, { collectionId: c.id, pageSize: 1 });
-    return { collection: { id: c.id, slug: c.slug, name: c.name, description: c.description, mediaCount: total } };
+    const c = await views.loadCollection(req.apiClient!, (req.params as { id: string }).id);
+    return { collection: c };
   });
 
   app.get('/v1/collections/:id/media', { preHandler: authenticate('collections:read') }, async (req) => {
-    const c = await views.loadCollection((req.params as { id: string }).id);
+    const c = await views.loadCollection(req.apiClient!, (req.params as { id: string }).id);
     return views.mediaOf(req.apiClient!, { ...parse(mediaQuery, req.query), collectionId: c.id });
   });
 
@@ -155,7 +154,12 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
       .from(photos)
       .innerJoin(events, eq(events.id, photos.eventId))
       .leftJoin(galleries, eq(galleries.id, photos.galleryId))
-      .where(and(eq(photos.id, id), eq(photos.status, 'ready'), sql`(${photos.isHidden} = false or ${events.coverPhotoId} = ${photos.id})`, ...visibleEvents(client, false)));
+      .where(and(
+        eq(photos.id, id),
+        eq(photos.status, 'ready'),
+        sql`(${photos.isHidden} = false or ${events.coverPhotoId} = ${photos.id})`,
+        ...visibleEvents(client, false),
+      ));
     if (!row || !isPubliclyAvailable(row.ev) || (row.g && !row.g.isVisible)) throw notFound('Photograph not found');
 
     let key: string | null;

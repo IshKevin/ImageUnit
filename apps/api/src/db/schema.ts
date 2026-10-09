@@ -256,6 +256,7 @@ export const collectionWebsites = pgTable(
     primaryKey({
       columns: [t.collectionId, t.clientId],
     }),
+    index('collection_websites_client_idx').on(t.clientId),
   ],
 );
 
@@ -368,4 +369,3 @@ export type Gallery = typeof galleries.$inferSelect;
 export type Photo = typeof photos.$inferSelect;
 export type ApiClient = typeof apiClients.$inferSelect;
 export type Collection = typeof collections.$inferSelect;
-

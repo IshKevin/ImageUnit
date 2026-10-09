@@ -25,7 +25,7 @@ export function createWebsiteViews(ctx: AppContext) {
       sql`(${events.expiresAt} is null or ${events.expiresAt} > now())`,
       ne(events.visibility, 'private'),
     ];
-    if (client.allowedEventIds?.length) conds.push(inArray(events.id, client.allowedEventIds));
+    if (client.allowedEventIds !== null) conds.push(inArray(events.id, client.allowedEventIds));
     // Unlisted events are reachable by id but never enumerated, unless explicitly allow-listed.
     else if (listing) conds.push(eq(events.visibility, 'public'));
     return conds;
@@ -140,7 +140,7 @@ export function createWebsiteViews(ctx: AppContext) {
     }
 
     const conds: SQL[] = [...publiclyVisibleMedia(sql`${galleries.isVisible}`)];
-    if (client.allowedEventIds?.length) conds.push(inArray(events.id, client.allowedEventIds));
+    if (client.allowedEventIds !== null) conds.push(inArray(events.id, client.allowedEventIds));
     if (f.eventId) conds.push(eq(events.id, f.eventId));
     if (f.id) conds.push(eq(photos.id, f.id));
     if (f.galleryId) conds.push(eq(photos.galleryId, f.galleryId));

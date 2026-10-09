@@ -165,6 +165,14 @@ export interface LibraryFilter {
 /** Either explicit ids, or "everything matching this filter, except these". Mirrors the API's selection. */
 export type Selection = { ids: string[] } | { filter: LibraryFilter; excludeIds: string[] };
 
+export interface Website {
+  id: string;
+  name: string;
+  status: 'active' | 'disabled' | 'revoked';
+  scopes: string[];
+  allowedEventIds?: string[] | null;
+}
+
 export interface Collection {
   id: string;
   slug: string;
@@ -172,6 +180,8 @@ export interface Collection {
   description: string;
   status: 'draft' | 'published';
   coverPhotoId: string | null;
+  websiteIds?: string[];
+  thumbnail?: string | null;
   createdAt: string;
   updatedAt: string;
   itemCount?: number;
@@ -190,20 +200,4 @@ export interface MemberCandidate {
   id: string;
   name: string;
   email: string;
-}
-
-export interface Collection {
-  id: string;
-  slug: string;
-  name: string;
-  description: string;
-  status: 'draft' | 'published';
-  coverPhotoId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  itemCount?: number;
-  coverUrl?: string | null;
-  thumbnail?: string | null;
-  websiteIds?: string[];
-  apiUrl?: string;
 }

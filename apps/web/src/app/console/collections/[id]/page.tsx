@@ -138,7 +138,7 @@ function AddMedia({ open, onClose, collectionId, onAdded }: { open: boolean; onC
   );
 }
 
-function Details({ c, saving, onSave }: { c: Collection & { websiteIds?: string[] }; saving: boolean; onSave: (b: Record<string, unknown>) => void }) {
+function Details({ c, saving, onSave }: { c: Collection; saving: boolean; onSave: (b: Record<string, unknown>) => void }) {
   const [name, setName] = useState(c.name);
   const [description, setDescription] = useState(c.description);
   const [slug, setSlug] = useState(c.slug);
