@@ -1,12 +1,13 @@
-import { and, desc, eq, gte, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { apiClients, apiUsageDaily, events } from '../db/schema.js';
+import { apiClients, apiUsageDaily, collectionItems, collectionWebsites, collections, events, photos } from '../db/schema.js';
 import { isUuid, makeGuards } from '../http/guards.js';
 import { parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
 import { generateApiKey, SCOPES } from '../lib/api-keys.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
+import { slugify } from '../lib/slug.js';
 import { clientDto } from './dto.js';
 
 const scopeList = z.array(z.enum(SCOPES)).min(1);
@@ -23,6 +24,16 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
     const [c] = await ctx.db.select().from(apiClients).where(eq(apiClients.id, id));
     if (!c) throw notFound('Website not found');
     return c;
+  }
+
+  async function uniqueCollectionSlug(name: string) {
+    const base = slugify(name);
+    for (let i = 0; i < 6; i++) {
+      const candidate = i === 0 ? base : `${base}-${Math.random().toString(36).slice(2, 6)}`;
+      const [hit] = await ctx.db.select({ id: collections.id }).from(collections).where(eq(collections.slug, candidate));
+      if (!hit) return candidate;
+    }
+    throw conflict('Could not allocate a unique link for this collection');
   }
 
   async function validateEventIds(ids: string[] | null | undefined) {
@@ -121,4 +132,147 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
     const rows = await ctx.db.select().from(apiUsageDaily).where(and(eq(apiUsageDaily.clientId, c.id), gte(apiUsageDaily.day, since))).orderBy(apiUsageDaily.day);
     return { items: rows };
   });
+
+  app.get('/admin/websites/:id/collections', { preHandler }, async (req) => {
+    const client = await load((req.params as { id: string }).id);
+    const rows = await ctx.db
+      .select({
+        c: collections,
+        itemCount: sql<number>`(select count(*) from ${collectionItems} ci where ci.collection_id = ${collections.id})::int`,
+        thumb: sql<string | null>`(select p.thumb_key from ${photos} p where p.id = coalesce(${collections.coverPhotoId}, (select ci.photo_id from ${collectionItems} ci where ci.collection_id = ${collections.id} order by ci.sort_order, ci.added_at limit 1)))`,
+      })
+      .from(collections)
+      .innerJoin(collectionWebsites, eq(collectionWebsites.collectionId, collections.id))
+      .where(eq(collectionWebsites.clientId, client.id))
+      .orderBy(desc(collections.updatedAt));
+
+    const items = await Promise.all(
+      rows.map(async (r) => ({
+        id: r.c.id,
+        slug: r.c.slug,
+        name: r.c.name,
+        description: r.c.description,
+        status: r.c.status,
+        coverPhotoId: r.c.coverPhotoId,
+        websiteId: client.id,
+        websiteIds: [client.id],
+        itemCount: r.itemCount,
+        coverUrl: r.thumb ? await ctx.storage.presignDownload(r.thumb, { ttlSeconds: 900 }) : null,
+        createdAt: r.c.createdAt,
+        updatedAt: r.c.updatedAt,
+      })),
+    );
+    return { items };
+  });
+
+  app.post('/admin/websites/:id/collections', { preHandler }, async (req, reply) => {
+    const client = await load((req.params as { id: string }).id);
+    if (client.status !== 'active') throw badRequest('Website is not active');
+    if (!client.scopes.includes('collections:read')) throw badRequest('Website does not have collections:read scope');
+
+    const body = parse(
+      z.object({
+        // Either link an existing collection:
+        collectionId: z.string().uuid().optional(),
+        // Or create a new collection directly:
+        name: z.string().trim().min(2).max(160).optional(),
+        description: z.string().max(5000).default(''),
+      }),
+      req.body,
+    );
+
+    if (body.collectionId) {
+      const [existing] = await ctx.db.select().from(collections).where(eq(collections.id, body.collectionId));
+      if (!existing) throw notFound('Collection not found');
+
+      await ctx.db.transaction(async (tx) => {
+        // Enforce 1 website per collection: remove any previous website assignments
+        await tx.delete(collectionWebsites).where(eq(collectionWebsites.collectionId, existing.id));
+        await tx.insert(collectionWebsites).values({
+          collectionId: existing.id,
+          clientId: client.id,
+        });
+        await tx.update(collections).set({ updatedAt: new Date() }).where(eq(collections.id, existing.id));
+        await audit(tx, actorFromRequest(req), {
+          action: 'collection.assigned_to_website',
+          entityType: 'collection',
+          entityId: existing.id,
+          meta: { clientId: client.id, clientName: client.name },
+        });
+      });
+
+      const [[{ n } = { n: 0 }], [photo]] = await Promise.all([
+        ctx.db.select({ n: sql<number>`count(*)::int` }).from(collectionItems).where(eq(collectionItems.collectionId, existing.id)),
+        existing.coverPhotoId ? ctx.db.select({ thumbKey: photos.thumbKey }).from(photos).where(eq(photos.id, existing.coverPhotoId)) : Promise.resolve([]),
+      ]);
+      const coverUrl = photo?.thumbKey ? await ctx.storage.presignDownload(photo.thumbKey, { ttlSeconds: 900 }) : null;
+
+      reply.code(201);
+      return {
+        collection: {
+          id: existing.id,
+          slug: existing.slug,
+          name: existing.name,
+          description: existing.description,
+          status: existing.status,
+          coverPhotoId: existing.coverPhotoId,
+          websiteId: client.id,
+          websiteIds: [client.id],
+          itemCount: n,
+          coverUrl,
+          createdAt: existing.createdAt,
+          updatedAt: existing.updatedAt,
+        },
+      };
+    }
+
+    if (!body.name) {
+      throw badRequest('Either collectionId or name is required');
+    }
+
+    const slug = await uniqueCollectionSlug(body.name);
+    const created = await ctx.db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(collections)
+        .values({
+          name: body.name!,
+          description: body.description,
+          slug,
+          createdBy: req.user!.id,
+        })
+        .returning();
+
+      await tx.insert(collectionWebsites).values({
+        collectionId: row!.id,
+        clientId: client.id,
+      });
+
+      await audit(tx, actorFromRequest(req), {
+        action: 'collection.created',
+        entityType: 'collection',
+        entityId: row!.id,
+        after: row,
+      });
+      return row!;
+    });
+
+    reply.code(201);
+    return {
+      collection: {
+        id: created.id,
+        slug: created.slug,
+        name: created.name,
+        description: created.description,
+        status: created.status,
+        coverPhotoId: created.coverPhotoId,
+        websiteId: client.id,
+        websiteIds: [client.id],
+        itemCount: 0,
+        coverUrl: null,
+        createdAt: created.createdAt,
+        updatedAt: created.updatedAt,
+      },
+    };
+  });
 };
+

@@ -180,6 +180,7 @@ export interface Collection {
   description: string;
   status: 'draft' | 'published';
   coverPhotoId: string | null;
+  websiteId?: string | null;
   websiteIds?: string[];
   thumbnail?: string | null;
   createdAt: string;

@@ -10,6 +10,7 @@ import { Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, EmptyState, E
 import { MediaBrowser } from '@/components/media-browser';
 import { BigModal } from '@/components/media/parts';
 import { CopyButton } from '../../../admin/_shared';
+import { CollectionCoverCard } from '@/components/collection-cover-card';
 import { get, patch, post, del, type Collection, type Selection, type Website } from '@/lib/api';
 import { can, useMe } from '@/lib/auth';
 import { label } from '@/lib/format';
@@ -57,20 +58,28 @@ export default function CollectionPage() {
   return (
     <>
       <p className="mb-2 text-sm"><Link href="/console/collections" className="text-muted hover:text-fg">← Collections</Link></p>
-      <PageHeader
-        title={c.name}
-        description={published ? 'Published collections are available to company websites.' : 'Draft. Publish it to make it available to company websites.'}
-        actions={
-          <>
-            <Badge tone={statusTone(published ? 'active' : 'draft')}>{label(c.status)}</Badge>
-            <Button variant={published ? 'secondary' : 'primary'} loading={save.isPending} onClick={() => save.mutate({ status: published ? 'draft' : 'published' })}>
-              {published ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
-              {published ? 'Unpublish' : 'Publish'}
-            </Button>
-            <Button onClick={() => setConfirmDelete(true)}><Trash2 className="size-4" aria-hidden />Delete</Button>
-          </>
-        }
-      />
+      <div className="flex items-start gap-4">
+        {c.coverUrl && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={c.coverUrl} alt="" className="size-14 shrink-0 rounded-lg object-cover" />
+        )}
+        <div className="min-w-0 flex-1">
+          <PageHeader
+            title={c.name}
+            description={published ? 'Published collections are available to company websites.' : 'Draft. Publish it to make it available to company websites.'}
+            actions={
+              <>
+                <Badge tone={statusTone(published ? 'active' : 'draft')}>{label(c.status)}</Badge>
+                <Button variant={published ? 'secondary' : 'primary'} loading={save.isPending} onClick={() => save.mutate({ status: published ? 'draft' : 'published' })}>
+                  {published ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
+                  {published ? 'Unpublish' : 'Publish'}
+                </Button>
+                <Button onClick={() => setConfirmDelete(true)}><Trash2 className="size-4" aria-hidden />Delete</Button>
+              </>
+            }
+          />
+        </div>
+      </div>
       <Tabs<Tab> value={tab} onChange={setTab} tabs={[{ id: 'items', label: `Items (${(c.itemCount ?? 0).toLocaleString()})` }, { id: 'details', label: 'Details' }, { id: 'dev', label: 'For developers' }]} />
 
       {tab === 'items' && (
@@ -100,7 +109,14 @@ export default function CollectionPage() {
         </>
       )}
 
-      {tab === 'details' && <Details c={c} saving={save.isPending} onSave={(b) => save.mutate(b)} />}
+      {tab === 'details' && (
+        <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
+          <Details c={c} saving={save.isPending} onSave={(b) => save.mutate(b)} />
+          <div className="space-y-6">
+            <CollectionCoverCard collection={c} />
+          </div>
+        </div>
+      )}
       {tab === 'dev' && <Developers c={c} />}
 
       <ConfirmDialog
@@ -142,7 +158,7 @@ function Details({ c, saving, onSave }: { c: Collection; saving: boolean; onSave
   const [name, setName] = useState(c.name);
   const [description, setDescription] = useState(c.description);
   const [slug, setSlug] = useState(c.slug);
-  const [websiteIds, setWebsiteIds] = useState<string[]>(c.websiteIds ?? []);
+  const [websiteId, setWebsiteId] = useState<string>(c.websiteId ?? c.websiteIds?.[0] ?? '');
   const draft = c.status === 'draft';
 
   const websites = useQuery({
@@ -151,13 +167,13 @@ function Details({ c, saving, onSave }: { c: Collection; saving: boolean; onSave
   });
 
   return (
-    <Card className="max-w-2xl">
+    <Card>
       <CardHeader title="Details" />
       <form
         className="space-y-4 p-5"
         onSubmit={(e) => {
           e.preventDefault();
-          onSave({ name: name.trim(), description, websiteIds, ...(draft && slug !== c.slug ? { slug } : {}) });
+          onSave({ name: name.trim(), description, websiteId: websiteId || null, ...(draft && slug !== c.slug ? { slug } : {}) });
         }}
       >
         <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} required minLength={2} maxLength={160} /></Field>
@@ -165,23 +181,20 @@ function Details({ c, saving, onSave }: { c: Collection; saving: boolean; onSave
         <Field label="Link (slug)" hint={draft ? 'Lowercase letters, numbers and hyphens. Websites use this in the URL, so choose it before publishing.' : 'The link cannot change after publishing, because websites already depend on it. Unpublish first to change it.'}>
           <Input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} disabled={!draft} pattern="[a-z0-9]+(-[a-z0-9]+)*" minLength={2} maxLength={80} />
         </Field>
-        <Field label="Websites" hint="Select which websites can access this collection.">
+        <Field label="Website" hint="Select the website that can access this collection.">
           {websites.isLoading ? (
             <Loading />
           ) : (
-            <div className="space-y-2 max-h-48 overflow-y-auto rounded-lg border border-border p-3">
+            <select
+              className="w-full h-10 rounded-lg border border-border bg-surface px-3 text-sm focus:border-accent"
+              value={websiteId}
+              onChange={(e) => setWebsiteId(e.target.value)}
+            >
+              <option value="">None (unassigned)</option>
               {websites.data?.items.map((w) => (
-                <label key={w.id} className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={websiteIds.includes(w.id)}
-                    onCheckedChange={(checked) => {
-                      setWebsiteIds(checked ? [...websiteIds, w.id] : websiteIds.filter((id) => id !== w.id));
-                    }}
-                  />
-                  <span>{w.name}</span>
-                </label>
+                <option key={w.id} value={w.id}>{w.name}</option>
               ))}
-            </div>
+            </select>
           )}
         </Field>
         <div className="flex justify-end"><Button type="submit" variant="primary" loading={saving}>Save changes</Button></div>

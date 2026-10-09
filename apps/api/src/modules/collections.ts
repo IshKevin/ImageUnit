@@ -32,6 +32,24 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
     return c;
   }
 
+  async function coverUrl(collectionId: string, coverPhotoId: string | null, size: 'thumb' | 'preview' = 'preview') {
+    const keyCol = size === 'thumb' ? photos.thumbKey : photos.previewKey;
+    let key: string | null | undefined;
+    if (coverPhotoId) {
+      key = (await ctx.db.select({ key: keyCol }).from(photos).where(and(eq(photos.id, coverPhotoId), eq(photos.status, 'ready'))))[0]?.key;
+    }
+    if (!key) {
+      key = (await ctx.db
+        .select({ key: keyCol })
+        .from(photos)
+        .innerJoin(collectionItems, eq(collectionItems.photoId, photos.id))
+        .where(and(eq(collectionItems.collectionId, collectionId), eq(photos.status, 'ready'), eq(photos.isHidden, false)))
+        .orderBy(asc(collectionItems.sortOrder), asc(collectionItems.addedAt))
+        .limit(1))[0]?.key;
+    }
+    return key ? ctx.storage.presignDownload(key, { ttlSeconds: 900 }) : null;
+  }
+
   async function uniqueSlug(name: string) {
     const base = slugify(name);
     for (let i = 0; i < 6; i++) {
@@ -56,7 +74,13 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
   }
 
   app.get('/collections', { preHandler }, async (req) => {
-    const q = parse(z.object({ q: z.string().trim().max(100).optional() }), req.query);
+    const q = parse(z.object({ q: z.string().trim().max(100).optional(), websiteId: z.string().uuid().optional() }), req.query);
+    const whereConds = [];
+    if (q.q) whereConds.push(ilike(collections.name, `%${q.q.replace(/[\\%_]/g, '\\$&')}%`));
+    if (q.websiteId) {
+      whereConds.push(sql`exists (select 1 from ${collectionWebsites} cw where cw.collection_id = ${collections.id} and cw.client_id = ${q.websiteId})`);
+    }
+    const where = whereConds.length ? and(...whereConds) : undefined;
     const rows = await ctx.db
       .select({
         c: collections,
@@ -64,7 +88,7 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
         thumb: sql<string | null>`(select p.thumb_key from ${photos} p where p.id = coalesce(${collections.coverPhotoId}, (select ci.photo_id from ${collectionItems} ci where ci.collection_id = ${collections.id} order by ci.sort_order, ci.added_at limit 1)))`,
       })
       .from(collections)
-      .where(q.q ? ilike(collections.name, `%${q.q.replace(/[\\%_]/g, '\\$&')}%`) : undefined)
+      .where(where)
       .orderBy(desc(collections.updatedAt));
     return { items: await Promise.all(rows.map(async (r) => dto(r.c, { itemCount: r.n, coverUrl: r.thumb ? await ctx.storage.presignDownload(r.thumb, { ttlSeconds: 900 }) : null }))) };
   });
@@ -74,18 +98,23 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
       z.object({
         name: z.string().trim().min(2).max(160),
         description: z.string().max(5000).default(''),
-        websiteIds: websiteIdsSchema.default([]),
+        websiteId: z.string().uuid().nullable().optional(),
+        websiteIds: websiteIdsSchema.optional(),
       }),
       req.body,
     );
+    const finalWebsiteIds = body.websiteId !== undefined
+      ? (body.websiteId ? [body.websiteId] : [])
+      : (body.websiteIds ?? []);
+
     const slug = await uniqueSlug(body.name);
     const created = await ctx.db.transaction(async (tx) => {
-      await validateWebsites(tx, body.websiteIds);
-      const { websiteIds, ...collectionData } = body;
+      await validateWebsites(tx, finalWebsiteIds);
+      const { websiteId, websiteIds, ...collectionData } = body;
       const [row] = await tx.insert(collections).values({ ...collectionData, slug, createdBy: req.user!.id }).returning();
-      if (websiteIds.length > 0) {
+      if (finalWebsiteIds.length > 0) {
         await tx.insert(collectionWebsites).values(
-          websiteIds.map((clientId) => ({
+          finalWebsiteIds.map((clientId) => ({
             collectionId: row!.id,
             clientId,
           })),
@@ -95,19 +124,24 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
       return row!;
     });
     reply.code(201);
-    return { collection: dto(created, { itemCount: 0 }) };
+    const primaryWebsiteId = finalWebsiteIds[0] ?? null;
+    return { collection: dto(created, { itemCount: 0, websiteId: primaryWebsiteId, websiteIds: finalWebsiteIds, coverUrl: null }) };
   });
 
   app.get('/collections/:id', { preHandler }, async (req) => {
     const c = await load((req.params as { id: string }).id);
-    const [[{ n } = { n: 0 }], websites] = await Promise.all([
+    const [[{ n } = { n: 0 }], websites, previewCoverUrl] = await Promise.all([
       ctx.db.select({ n: count() }).from(collectionItems).where(eq(collectionItems.collectionId, c.id)),
       ctx.db.select({ clientId: collectionWebsites.clientId }).from(collectionWebsites).where(eq(collectionWebsites.collectionId, c.id)),
+      coverUrl(c.id, c.coverPhotoId, 'preview'),
     ]);
+    const websiteIdList = websites.map(({ clientId }) => clientId);
     return {
       collection: dto(c, {
         itemCount: n,
-        websiteIds: websites.map(({ clientId }) => clientId),
+        websiteId: websiteIdList[0] ?? null,
+        websiteIds: websiteIdList,
+        coverUrl: previewCoverUrl,
         apiUrl: `${ctx.config.API_PUBLIC_URL}/api/v1/collections/${c.slug}`,
       }),
     };
@@ -121,6 +155,7 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
         status: z.enum(['draft', 'published']),
         slug: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/).min(2).max(80),
         coverPhotoId: z.string().uuid().nullable(),
+        websiteId: z.string().uuid().nullable().optional(),
         websiteIds: websiteIdsSchema.optional(),
       }).partial(),
       req.body,
@@ -133,22 +168,27 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
     }
     if (body.coverPhotoId) {
       const [m] = await ctx.db.select({ id: collectionItems.photoId }).from(collectionItems).where(and(eq(collectionItems.collectionId, c.id), eq(collectionItems.photoId, body.coverPhotoId)));
-      if (!m) throw badRequest('The cover must be an item of this collection');
+      const [readyCover] = await ctx.db.select({ id: photos.id }).from(photos).where(and(eq(photos.id, body.coverPhotoId), eq(photos.status, 'ready')));
+      if (!m && !readyCover) throw badRequest('The cover photo is not found or not ready');
     }
+    const finalWebsiteIds = body.websiteId !== undefined
+      ? (body.websiteId ? [body.websiteId] : [])
+      : body.websiteIds;
+
     const updated = await ctx.db.transaction(async (tx) => {
-      if (body.websiteIds !== undefined) {
-        await validateWebsites(tx, body.websiteIds);
+      if (finalWebsiteIds !== undefined) {
+        await validateWebsites(tx, finalWebsiteIds);
       }
-      const { websiteIds, ...collectionUpdates } = body;
+      const { websiteId, websiteIds, ...collectionUpdates } = body;
       const [row] = Object.keys(collectionUpdates).length > 0
         ? await tx.update(collections).set(collectionUpdates).where(eq(collections.id, c.id)).returning()
         : [c];
 
-      if (websiteIds !== undefined) {
+      if (finalWebsiteIds !== undefined) {
         await tx.delete(collectionWebsites).where(eq(collectionWebsites.collectionId, c.id));
-        if (websiteIds.length > 0) {
+        if (finalWebsiteIds.length > 0) {
           await tx.insert(collectionWebsites).values(
-            websiteIds.map((clientId) => ({
+            finalWebsiteIds.map((clientId) => ({
               collectionId: c.id,
               clientId,
             })),
@@ -162,7 +202,20 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
       });
       return row!;
     });
-    return { collection: dto(updated) };
+    const [websites, previewCoverUrl, [{ n } = { n: 0 }]] = await Promise.all([
+      ctx.db.select({ clientId: collectionWebsites.clientId }).from(collectionWebsites).where(eq(collectionWebsites.collectionId, c.id)),
+      coverUrl(updated.id, updated.coverPhotoId, 'preview'),
+      ctx.db.select({ n: count() }).from(collectionItems).where(eq(collectionItems.collectionId, c.id)),
+    ]);
+    const websiteIdList = websites.map(({ clientId }) => clientId);
+    return {
+      collection: dto(updated, {
+        itemCount: n,
+        websiteId: websiteIdList[0] ?? null,
+        websiteIds: websiteIdList,
+        coverUrl: previewCoverUrl,
+      }),
+    };
   });
 
   app.delete('/collections/:id', { preHandler }, async (req, reply) => {

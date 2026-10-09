@@ -20,7 +20,7 @@ export default function CollectionsPage() {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [websiteIds, setWebsiteIds] = useState<string[]>([]);
+  const [websiteId, setWebsiteId] = useState<string>('');
   const allowed = can(user, 'collections:manage');
 
   const websites = useQuery({
@@ -31,7 +31,7 @@ export default function CollectionsPage() {
 
   const list = useQuery({ queryKey: ['collections', dq], queryFn: () => get<{ items: Collection[] }>(`/collections${qs({ q: dq })}`), enabled: allowed, placeholderData: (p) => p });
   const create = useMutation({
-    mutationFn: () => post<{ collection: Collection }>('/collections', { name: name.trim(), description, websiteIds }),
+    mutationFn: () => post<{ collection: Collection }>('/collections', { name: name.trim(), description, websiteId: websiteId || null }),
     onSuccess: (r) => { toast.success('Collection created'); router.push(`/console/collections/${r.collection.id}`); },
     onError: (e) => toast.error(e.message),
   });
@@ -79,23 +79,20 @@ export default function CollectionsPage() {
         <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
           <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} required minLength={2} maxLength={160} autoFocus /></Field>
           <Field label="Description" hint="Optional. Returned to the website with the collection."><Textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={5000} /></Field>
-          <Field label="Websites" hint="Select which websites can access this collection.">
+          <Field label="Website" hint="Optional. Choose the website that will have access to this collection.">
             {websites.isLoading ? (
               <Loading />
             ) : (
-              <div className="space-y-2 max-h-48 overflow-y-auto rounded-lg border border-border p-3">
+              <select
+                className="w-full h-10 rounded-lg border border-border bg-surface px-3 text-sm focus:border-accent"
+                value={websiteId}
+                onChange={(e) => setWebsiteId(e.target.value)}
+              >
+                <option value="">None (unassigned)</option>
                 {websites.data?.items.map((w) => (
-                  <label key={w.id} className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={websiteIds.includes(w.id)}
-                      onCheckedChange={(checked) => {
-                        setWebsiteIds(checked ? [...websiteIds, w.id] : websiteIds.filter((id) => id !== w.id));
-                      }}
-                    />
-                    <span>{w.name}</span>
-                  </label>
+                  <option key={w.id} value={w.id}>{w.name}</option>
                 ))}
-              </div>
+              </select>
             )}
           </Field>
           <div className="flex justify-end gap-2">

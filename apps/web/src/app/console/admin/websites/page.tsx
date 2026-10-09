@@ -56,6 +56,7 @@ function Websites() {
   const [rotate, setRotate] = useState<Website | null>(null);
   const [usage, setUsage] = useState<Website | null>(null);
   const [eventAccess, setEventAccess] = useState<Website | null>(null);
+  const [collectionAccess, setCollectionAccess] = useState<Website | null>(null);
   const refresh = () => qc.invalidateQueries({ queryKey: ['admin-websites'] });
   const fail = (e: unknown) => toast.error(e instanceof Error ? e.message : 'Request failed');
 
@@ -106,6 +107,7 @@ function Websites() {
                       <Button size="sm" onClick={() => setUsage(w)} aria-label={`Usage for ${w.name}`}><BarChart3 className="size-4" aria-hidden /> Usage</Button>
                       {w.status !== 'revoked' && (
                         <>
+                          <Button size="sm" onClick={() => setCollectionAccess(w)}>Collections</Button>
                           <Button size="sm" onClick={() => setEventAccess(w)}>Events</Button>
                           <Button size="sm" onClick={() => toggle.mutate(w)} disabled={toggle.isPending}>{w.status === 'active' ? 'Disable' : 'Enable'}</Button>
                           <Button size="sm" onClick={() => setRotate(w)}>Rotate key</Button>
@@ -123,6 +125,7 @@ function Websites() {
 
       <CreateWebsite open={creating} onClose={() => setCreating(false)} onCreated={(name, apiKey) => { setCreating(false); refresh(); setKey({ title: `API key for ${name}`, value: apiKey }); }} />
       {eventAccess && <WebsiteEventsModal website={eventAccess} onClose={() => setEventAccess(null)} onSaved={refresh} />}
+      {collectionAccess && <WebsiteCollectionsModal website={collectionAccess} onClose={() => setCollectionAccess(null)} onSaved={refresh} />}
       <SecretDialog open={!!key} onClose={() => setKey(null)} title={key?.title ?? ''} secret={key?.value ?? ''} warning="Copy this key now. It is shown only once and cannot be retrieved later." />
       <ConfirmDialog open={!!rotate} onClose={() => setRotate(null)} title="Rotate API key" message={`The current key for ${rotate?.name} stops working immediately. A new key will be shown once.`} confirmLabel="Rotate key" loading={doRotate.isPending} onConfirm={() => rotate && doRotate.mutate(rotate)} />
       <ConfirmDialog open={!!revoke} onClose={() => setRevoke(null)} title="Revoke access" message={`Revoking ${revoke?.name} is irreversible. To restore access you must create a new website credential.`} confirmLabel="Revoke" danger loading={doRevoke.isPending} onConfirm={() => revoke && doRevoke.mutate(revoke)} />
@@ -266,3 +269,230 @@ function WebsiteEventsModal({ website, onClose, onSaved }: { website: Website; o
     </Modal>
   );
 }
+
+function WebsiteCollectionsModal({ website, onClose, onSaved }: { website: Website; onClose: () => void; onSaved: () => void }) {
+  const qc = useQueryClient();
+  const [addingExisting, setAddingExisting] = useState(false);
+  const [selectedCollectionId, setSelectedCollectionId] = useState('');
+  const [creatingNew, setCreatingNew] = useState(false);
+  const [newCollectionName, setNewCollectionName] = useState('');
+  const [newCollectionDescription, setNewCollectionDescription] = useState('');
+
+  const assigned = useQuery({
+    queryKey: ['admin-website-collections', website.id],
+    queryFn: () => get<{ items: Array<WebsiteSummary & { id: string; name: string; slug: string; itemCount: number; status: string; coverUrl: string | null }> }>(`/admin/websites/${website.id}/collections`),
+  });
+
+  const allCollections = useQuery({
+    queryKey: ['collections-all-for-picker'],
+    queryFn: () => get<{ items: Array<{ id: string; name: string; slug: string }> }>('/collections'),
+    enabled: addingExisting,
+  });
+
+  const linkExisting = useMutation({
+    mutationFn: (collectionId: string) => post(`/admin/websites/${website.id}/collections`, { collectionId }),
+    onSuccess: () => {
+      toast.success('Collection linked to website');
+      setSelectedCollectionId('');
+      setAddingExisting(false);
+      void qc.invalidateQueries({ queryKey: ['admin-website-collections', website.id] });
+      void qc.invalidateQueries({ queryKey: ['collections'] });
+      onSaved();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : 'Request failed'),
+  });
+
+  const createCollection = useMutation({
+    mutationFn: () =>
+      post(`/admin/websites/${website.id}/collections`, {
+        name: newCollectionName.trim(),
+        description: newCollectionDescription.trim(),
+      }),
+    onSuccess: () => {
+      toast.success('New collection created and linked');
+      setNewCollectionName('');
+      setNewCollectionDescription('');
+      setCreatingNew(false);
+      void qc.invalidateQueries({ queryKey: ['admin-website-collections', website.id] });
+      void qc.invalidateQueries({ queryKey: ['collections'] });
+      onSaved();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : 'Request failed'),
+  });
+
+  const unlinkCollection = useMutation({
+    mutationFn: (collectionId: string) => patch(`/collections/${collectionId}`, { websiteId: null }),
+    onSuccess: () => {
+      toast.success('Collection unlinked');
+      void qc.invalidateQueries({ queryKey: ['admin-website-collections', website.id] });
+      void qc.invalidateQueries({ queryKey: ['collections'] });
+      onSaved();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : 'Request failed'),
+  });
+
+  const items = assigned.data?.items ?? [];
+  const assignedIds = new Set(items.map((i) => i.id));
+  const availableToLink = (allCollections.data?.items ?? []).filter((c) => !assignedIds.has(c.id));
+
+  return (
+    <Modal open onClose={onClose} title={`Collections: ${website.name}`} wide>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted">
+            Collections assigned to this website can be fetched with this website&apos;s API key.
+          </p>
+          <div className="flex gap-2">
+            {!creatingNew && !addingExisting && (
+              <>
+                <Button size="sm" onClick={() => setAddingExisting(true)}>
+                  Link existing
+                </Button>
+                <Button size="sm" variant="primary" onClick={() => setCreatingNew(true)}>
+                  <Plus className="size-4" /> New collection
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {addingExisting && (
+          <div className="rounded-lg border border-border bg-surface-2 p-3 space-y-3">
+            <h4 className="text-sm font-medium">Link existing collection</h4>
+            {allCollections.isLoading ? (
+              <Loading />
+            ) : availableToLink.length === 0 ? (
+              <p className="text-xs text-muted">No unassigned or other collections available to link.</p>
+            ) : (
+              <div className="flex gap-2">
+                <select
+                  className="flex-1 h-9 rounded-lg border border-border bg-surface px-3 text-sm focus:border-accent"
+                  value={selectedCollectionId}
+                  onChange={(e) => setSelectedCollectionId(e.target.value)}
+                >
+                  <option value="">Select a collection…</option>
+                  {availableToLink.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.slug})
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={!selectedCollectionId}
+                  loading={linkExisting.isPending}
+                  onClick={() => linkExisting.mutate(selectedCollectionId)}
+                >
+                  Link
+                </Button>
+                <Button size="sm" onClick={() => setAddingExisting(false)}>
+                  Cancel
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {creatingNew && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              createCollection.mutate();
+            }}
+            className="rounded-lg border border-border bg-surface-2 p-3 space-y-3"
+          >
+            <h4 className="text-sm font-medium">Create collection for this website</h4>
+            <Field label="Name">
+              <Input
+                required
+                minLength={2}
+                maxLength={160}
+                value={newCollectionName}
+                onChange={(e) => setNewCollectionName(e.target.value)}
+                placeholder="Collection name"
+              />
+            </Field>
+            <Field label="Description (optional)">
+              <Textarea
+                maxLength={5000}
+                className="min-h-16"
+                value={newCollectionDescription}
+                onChange={(e) => setNewCollectionDescription(e.target.value)}
+                placeholder="Description"
+              />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button size="sm" type="button" onClick={() => setCreatingNew(false)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                type="submit"
+                variant="primary"
+                loading={createCollection.isPending}
+                disabled={newCollectionName.trim().length < 2}
+              >
+                Create and link
+              </Button>
+            </div>
+          </form>
+        )}
+
+        {assigned.isLoading ? (
+          <Loading />
+        ) : items.length === 0 ? (
+          <EmptyState
+            title="No collections assigned"
+            description="Assign or create a collection for this website."
+          />
+        ) : (
+          <div className="max-h-72 overflow-y-auto space-y-2 border border-border rounded-lg p-2">
+            {items.map((col) => (
+              <div
+                key={col.id}
+                className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface p-2.5"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  {col.coverUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={col.coverUrl} alt="" className="size-10 rounded object-cover shrink-0" />
+                  ) : (
+                    <div className="grid size-10 place-items-center rounded bg-surface-2 text-muted shrink-0">
+                      <BarChart3 className="size-4" />
+                    </div>
+                  )}
+                  <div className="min-w-0 truncate">
+                    <p className="font-medium text-sm truncate">{col.name}</p>
+                    <p className="text-xs text-muted truncate">
+                      {col.slug} · {col.itemCount} items · {label(col.status)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Badge tone={statusTone(col.status === 'published' ? 'active' : 'draft')}>
+                    {label(col.status)}
+                  </Badge>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    loading={unlinkCollection.isPending && unlinkCollection.variables === col.id}
+                    onClick={() => unlinkCollection.mutate(col.id)}
+                    aria-label={`Unlink ${col.name}`}
+                  >
+                    Unlink
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <Button onClick={onClose}>Close</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
