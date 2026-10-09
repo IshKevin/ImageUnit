@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, EmptyState, ErrorNote, Field, Input, Loading, PageHeader, Tabs, Textarea, statusTone } from '@/components/ui';
 import { MediaBrowser } from '@/components/media-browser';
 import { BigModal } from '@/components/media/parts';
-import { CopyButton } from '../../../admin/_shared';
+import { CopyButton } from './../../admin/_shared';
 import { CollectionCoverCard } from '@/components/collection-cover-card';
 import { get, patch, post, del, type Collection, type Selection, type Website } from '@/lib/api';
 import { can, useMe } from '@/lib/auth';

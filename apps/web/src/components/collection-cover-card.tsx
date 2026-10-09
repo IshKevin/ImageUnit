@@ -5,7 +5,7 @@ import clsx from 'clsx';
 import { Check, ImageIcon, Images } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { Button, Card, CardHeader, ErrorNote, Modal, Pagination, Spinner } from '../ui';
+import { Button, Card, CardHeader, ErrorNote, Modal, Pagination, Spinner } from '@/components/ui';
 import { get, patch, qs, type Collection, type Paged, type Photo } from '@/lib/api';
 
 const PICK_PAGE_SIZE = 24;

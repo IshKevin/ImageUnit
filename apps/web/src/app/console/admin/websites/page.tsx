@@ -470,7 +470,7 @@ function WebsiteCollectionsModal({ website, onClose, onSaved }: { website: Websi
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <Badge tone={statusTone(col.status === 'published' ? 'active' : 'draft')}>
+                  <Badge tone={statusTone(col.status === 'active' ? 'active' : 'disabled')}>
                     {label(col.status)}
                   </Badge>
                   <Button
