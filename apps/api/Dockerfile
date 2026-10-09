@@ -3,6 +3,8 @@ FROM node:24-bookworm-slim AS build
 WORKDIR /repo
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY apps/e2e/package.json apps/e2e/
 # --include=dev: tsc is needed to build even if the platform injects NODE_ENV=production.
 RUN npm ci -w @imageunit/api --include-workspace-root --include=dev
 COPY apps/api apps/api
