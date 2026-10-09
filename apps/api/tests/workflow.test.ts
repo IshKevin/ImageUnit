@@ -360,6 +360,7 @@ describe('website integration', () => {
 
     expect((await s.admin.patch(`/api/collections/${collection.id}`, { status: 'published' })).statusCode).toBe(200);
     expect((await api(url)).json().items.map((item: { id: string }) => item.id)).toEqual([collection.id]);
+    expect((await api(`/api/admin/websites/${s.website.id.toUpperCase()}/collections`)).json().items.map((item: { id: string }) => item.id)).toEqual([collection.id]);
 
     await s.admin.post(`/api/admin/websites/${s.website.id}/revoke`);
     expect((await api(url)).statusCode).toBe(403);

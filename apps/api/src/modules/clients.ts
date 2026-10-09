@@ -147,7 +147,9 @@ export const clientRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = async 
       if (req.headers.authorization !== undefined || req.headers['x-api-key'] !== undefined) {
         await authenticate('collections:read')(req);
         const id = (req.params as { id: string }).id;
-        if (!isUuid(id) || req.apiClient!.id !== id) throw notFound('Website not found');
+        if (!isUuid(id) || req.apiClient!.id.toLowerCase() !== id.toLowerCase()) {
+          throw notFound('Website not found');
+        }
         return;
       }
       await preHandler(req, reply);
