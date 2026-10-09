@@ -8,16 +8,25 @@ import { actorFromRequest, audit } from '../lib/audit.js';
 import { generateApiKey, SCOPES } from '../lib/api-keys.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { slugify } from '../lib/slug.js';
+import { createWebsiteAuthenticator } from '../lib/website-auth.js';
+import { createWebsiteViews } from '../lib/website-views.js';
+import type { UsageRecorder } from '../lib/usage.js';
 import { clientDto } from './dto.js';
 
 const scopeList = z.array(z.enum(SCOPES)).min(1);
 const origins = z.array(z.string().url().transform((u) => new URL(u).origin)).max(20);
 
-export const clientRoutes: FastifyPluginAsync = async (app) => {
+export const clientRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = async (app, { usage }) => {
   const ctx = app.ctx;
   const guard = makeGuards(ctx);
+  const websiteViews = createWebsiteViews(ctx);
   // Website registration and API credentials are separate permissions, both administrator-only.
   const preHandler = guard.perm('websites:manage', 'api:manage');
+  const { authenticate } = createWebsiteAuthenticator(ctx, usage);
+
+  app.addHook('onResponse', async (req, reply) => {
+    if (req.apiClient && reply.statusCode >= 400) usage.recordError(req.apiClient.id);
+  });
 
   async function load(id: string) {
     if (!isUuid(id)) throw notFound('Website not found');
@@ -133,8 +142,19 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
     return { items: rows };
   });
 
-  app.get('/admin/websites/:id/collections', { preHandler }, async (req) => {
-    const client = await load((req.params as { id: string }).id);
+  app.get('/admin/websites/:id/collections', {
+    preHandler: async (req, reply) => {
+      if (req.headers.authorization !== undefined || req.headers['x-api-key'] !== undefined) {
+        await authenticate('collections:read')(req);
+        const id = (req.params as { id: string }).id;
+        if (!isUuid(id) || req.apiClient!.id !== id) throw notFound('Website not found');
+        return;
+      }
+      await preHandler(req, reply);
+    },
+  }, async (req) => {
+    const id = (req.params as { id: string }).id;
+    const client = req.apiClient ?? await load(id);
     const rows = await ctx.db
       .select({
         c: collections,
@@ -143,24 +163,33 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
       })
       .from(collections)
       .innerJoin(collectionWebsites, eq(collectionWebsites.collectionId, collections.id))
-      .where(eq(collectionWebsites.clientId, client.id))
+      .where(req.apiClient
+        ? and(eq(collectionWebsites.clientId, client.id), eq(collections.status, 'published'))
+        : eq(collectionWebsites.clientId, client.id))
       .orderBy(desc(collections.updatedAt));
 
     const items = await Promise.all(
-      rows.map(async (r) => ({
-        id: r.c.id,
-        slug: r.c.slug,
-        name: r.c.name,
-        description: r.c.description,
-        status: r.c.status,
-        coverPhotoId: r.c.coverPhotoId,
-        websiteId: client.id,
-        websiteIds: [client.id],
-        itemCount: r.itemCount,
-        coverUrl: r.thumb ? await ctx.storage.presignDownload(r.thumb, { ttlSeconds: 900 }) : null,
-        createdAt: r.c.createdAt,
-        updatedAt: r.c.updatedAt,
-      })),
+      rows.map(async (r) => {
+        const publicView = req.apiClient ? await websiteViews.loadCollection(client, r.c.slug) : null;
+        return {
+          id: r.c.id,
+          slug: r.c.slug,
+          name: r.c.name,
+          description: r.c.description,
+          status: req.apiClient ? 'published' : r.c.status,
+          coverPhotoId: req.apiClient ? null : r.c.coverPhotoId,
+          websiteId: client.id,
+          websiteIds: [client.id],
+          itemCount: req.apiClient ? publicView?.mediaCount ?? 0 : r.itemCount,
+          coverUrl: req.apiClient
+            ? publicView?.thumbnail ?? null
+            : r.thumb
+              ? await ctx.storage.presignDownload(r.thumb, { ttlSeconds: 900 })
+              : null,
+          createdAt: r.c.createdAt,
+          updatedAt: r.c.updatedAt,
+        };
+      }),
     );
     return { items };
   });
@@ -275,4 +304,3 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 };
-

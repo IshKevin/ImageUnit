@@ -122,7 +122,7 @@ export async function buildApp(ctx: AppContext, opts: { rateLimitMax?: number } 
       await api.register(collectionRoutes);
       await api.register(photoRoutes);
       await api.register(publicRoutes);
-      await api.register(clientRoutes);
+      await api.register(clientRoutes, { usage });
       await api.register(developerRoutes);
       await api.register(adminRoutes);
       await api.register(statsRoutes);

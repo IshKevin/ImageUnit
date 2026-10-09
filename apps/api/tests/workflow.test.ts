@@ -332,6 +332,39 @@ describe('website integration', () => {
     expect((await s.api('/api/v1/events', rotated.apiKey)).statusCode).toBe(200);
   });
 
+  it('lets a matching website API key read only its published collections', async () => {
+    const s = await setup();
+    const url = `/api/admin/websites/${s.website.id}/collections`;
+    const api = (path: string, key = s.apiKey) => t.app.inject({
+      method: 'GET',
+      url: path,
+      headers: { authorization: `Bearer ${key}` },
+    });
+
+    expect((await t.app.inject({ method: 'GET', url })).statusCode).toBe(401);
+
+    const created = await s.admin.post(url, { name: `Key collection ${Math.random()}` });
+    expect(created.statusCode).toBe(201);
+    const collection = created.json().collection;
+    expect((await s.admin.get(url)).json().items.map((item: { id: string }) => item.id)).toContain(collection.id);
+    expect((await api(url)).json().items).toEqual([]);
+
+    const other = (await s.admin.post('/api/admin/websites', { name: `Other ${Math.random()}` })).json();
+    expect((await api(`/api/admin/websites/${other.website.id}/collections`)).statusCode).toBe(404);
+
+    const noScope = (await s.admin.post('/api/admin/websites', {
+      name: `No collections scope ${Math.random()}`,
+      scopes: ['events:read'],
+    })).json();
+    expect((await api(`/api/admin/websites/${noScope.website.id}/collections`, noScope.apiKey)).statusCode).toBe(403);
+
+    expect((await s.admin.patch(`/api/collections/${collection.id}`, { status: 'published' })).statusCode).toBe(200);
+    expect((await api(url)).json().items.map((item: { id: string }) => item.id)).toEqual([collection.id]);
+
+    await s.admin.post(`/api/admin/websites/${s.website.id}/revoke`);
+    expect((await api(url)).statusCode).toBe(403);
+  });
+
   it('rate limits per credential', async () => {
     const s = await setup();
     const c = (await s.admin.post('/api/admin/websites', { name: `Limited ${Math.random()}`, rateLimitPerMinute: 10 })).json();

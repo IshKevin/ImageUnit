@@ -1,5 +1,5 @@
 import { and, asc, count, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { q } from '../lib/sql.js';
 import type { UsageRecorder } from '../lib/usage.js';
@@ -7,13 +7,12 @@ import { apiClients, events, galleries, photos, type ApiClient, type Event } fro
 import { isUuid } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { effectiveDownloadPolicy, isPubliclyAvailable } from '../lib/access.js';
-import { hashApiKey, signMedia, verifyMedia, type Scope } from '../lib/api-keys.js';
-import { AppError, forbidden, notFound, unauthorized } from '../lib/errors.js';
+import { signMedia, verifyMedia, type Scope } from '../lib/api-keys.js';
+import { AppError, forbidden, notFound } from '../lib/errors.js';
 import { downloadName } from '../lib/media.js';
 import { track } from '../lib/public-access.js';
 import { createWebsiteViews } from '../lib/website-views.js';
-
-const memoryWindows = new Map<string, number>();
+import { createWebsiteAuthenticator } from '../lib/website-auth.js';
 
 /**
  * Programmatic access for the company's websites. Authenticated with a revocable bearer key;
@@ -21,40 +20,7 @@ const memoryWindows = new Map<string, number>();
  */
 export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = async (app, { usage }) => {
   const ctx = app.ctx;
-
-  async function rateLimit(client: ApiClient) {
-    const window = Math.floor(Date.now() / 60_000);
-    const key = `rl:client:${client.id}:${window}`;
-    let hits: number;
-    if (ctx.redis) {
-      hits = await ctx.redis.incr(key);
-      if (hits === 1) await ctx.redis.expire(key, 90);
-    } else {
-      hits = (memoryWindows.get(key) ?? 0) + 1;
-      memoryWindows.set(key, hits);
-    }
-    if (hits > client.rateLimitPerMinute) throw new AppError(429, 'rate_limited', 'Rate limit exceeded');
-  }
-
-  function checkOrigin(client: ApiClient, req: FastifyRequest) {
-    const origin = req.headers.origin;
-    if (origin && client.allowedOrigins.length > 0 && !client.allowedOrigins.includes(origin)) throw forbidden('Origin not allowed for this credential');
-  }
-
-  const authenticate = (scope: Scope) => async (req: FastifyRequest) => {
-    const header = req.headers.authorization;
-    const raw = header?.startsWith('Bearer ') ? header.slice(7).trim() : (req.headers['x-api-key'] as string | undefined);
-    if (!raw) throw unauthorized('API key required');
-    const [client] = await ctx.db.select().from(apiClients).where(eq(apiClients.keyHash, hashApiKey(raw)));
-    if (!client) throw unauthorized('Invalid API key');
-    // Checked against the database on every request, so revocation is immediate.
-    if (client.status !== 'active') throw forbidden(`This credential is ${client.status}`);
-    if (!client.scopes.includes(scope)) throw forbidden(`Missing scope: ${scope}`);
-    checkOrigin(client, req);
-    await rateLimit(client);
-    req.apiClient = client;
-    usage.record(client.id);
-  };
+  const { authenticate, rateLimit } = createWebsiteAuthenticator(ctx, usage);
 
   app.addHook('onResponse', async (req, reply) => {
     if (req.apiClient && reply.statusCode >= 400) usage.recordError(req.apiClient.id);
