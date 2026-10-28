@@ -25,6 +25,7 @@ import { publicRoutes } from './modules/public.js';
 import { statsRoutes } from './modules/stats.js';
 import { userRoutes } from './modules/users.js';
 import { websiteApiRoutes } from './modules/website-api.js';
+import { ssoRoutes } from './modules/sso.js';
 
 export async function buildApp(ctx: AppContext, opts: { rateLimitMax?: number } = {}) {
   const app = Fastify({
@@ -114,6 +115,7 @@ export async function buildApp(ctx: AppContext, opts: { rateLimitMax?: number } 
   await app.register(
     async (api) => {
       await api.register(authRoutes);
+      await api.register(ssoRoutes);
       await api.register(userRoutes);
       await api.register(eventRoutes);
       await api.register(galleryRoutes);

@@ -82,6 +82,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post('/auth/change-password', { preHandler: guard.user }, async (req) => {
     const body = parse(z.object({ currentPassword: z.string(), newPassword: passwordSchema }), req.body);
     const u = req.user!;
+    if (!u.passwordHash) throw badRequest('This account signs in with AFS SSO and has no ImageUnit password');
     if (!(await verifyPassword(u.passwordHash, body.currentPassword))) throw badRequest('Current password is incorrect');
     await ctx.db.transaction(async (tx) => {
       await tx.update(users).set({ passwordHash: await hashPassword(body.newPassword) }).where(eq(users.id, u.id));

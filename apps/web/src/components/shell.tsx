@@ -103,7 +103,8 @@ export function Shell({ children }: { children: ReactNode }) {
     mutationFn: () => post('/auth/logout'),
     onSuccess: () => {
       qc.clear();
-      router.replace('/login');
+      // signed_out stops the login page from signing the person straight back in through AFS.
+      router.replace('/login?signed_out=1');
     },
   });
 

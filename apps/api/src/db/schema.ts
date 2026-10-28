@@ -55,7 +55,10 @@ export const users = pgTable(
     id: id(),
     email: text('email').notNull(),
     name: text('name').notNull(),
-    passwordHash: text('password_hash').notNull(),
+    /** Null for accounts that sign in only through AFS SSO. */
+    passwordHash: text('password_hash'),
+    /** Keycloak subject of the linked AFS identity. Set when the account is linked to SSO. */
+    oidcSub: text('oidc_sub'),
     role: userRole('role').notNull().default('photographer'),
     status: userStatus('status').notNull().default('active'),
     /** Extra permissions granted by an admin on top of the role defaults. */
@@ -69,7 +72,11 @@ export const users = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex('users_email_unique').on(sql`lower(${t.email})`), index('users_status_idx').on(t.status)],
+  (t) => [
+    uniqueIndex('users_email_unique').on(sql`lower(${t.email})`),
+    uniqueIndex('users_oidc_sub_unique').on(t.oidcSub).where(sql`${t.oidcSub} IS NOT NULL`),
+    index('users_status_idx').on(t.status),
+  ],
 );
 
 export const sessions = pgTable(
@@ -80,6 +87,8 @@ export const sessions = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     tokenHash: text('token_hash').notNull(),
+    /** Created by AFS SSO: fixed lifetime, no sliding renewal, so revoked access ends within that lifetime. */
+    sso: boolean('sso').notNull().default(false),
     ip: text('ip'),
     userAgent: text('user_agent'),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
