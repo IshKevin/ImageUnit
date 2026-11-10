@@ -114,22 +114,48 @@ export function authorizationUrl(settings: SsoSettings, params: { state: string;
   return url.toString();
 }
 
+/** True for errors where Keycloak could not be reached at all (DNS, refused, timeout), as opposed to an answer. */
+function isUnreachable(err: unknown): boolean {
+  const e = err as { name?: string; code?: string; message?: string; cause?: { code?: string; message?: string } };
+  if (e?.name === 'TypeError' || e?.name === 'TimeoutError' || e?.name === 'AbortError' || e?.code === 'ERR_JWKS_TIMEOUT') return true;
+  return /fetch failed|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT/.test(`${e?.message ?? ''} ${e?.cause?.code ?? ''} ${e?.cause?.message ?? ''}`);
+}
+
+/**
+ * Run a Keycloak call against the internal issuer, falling back to the public one when the internal address cannot be
+ * reached (e.g. the shared network is missing). Answers from Keycloak, including errors, are never retried.
+ */
+async function withKeycloak<T>(settings: SsoSettings, call: (base: string) => Promise<T>): Promise<T> {
+  try {
+    return await call(settings.internalIssuer);
+  } catch (err) {
+    if (settings.internalIssuer === settings.issuer || !isUnreachable(err)) throw err;
+    return call(settings.issuer);
+  }
+}
+
 /** Exchange the authorization code for tokens. Runs server to server, so the client secret never leaves the API. */
 export async function exchangeCode(settings: SsoSettings, code: string, verifier: string): Promise<{ id_token: string; access_token: string }> {
-  const res = await fetch(`${settings.internalIssuer}/protocol/openid-connect/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: settings.redirectUri,
-      client_id: settings.clientId,
-      client_secret: settings.clientSecret,
-      code_verifier: verifier,
+  const res = await withKeycloak(settings, (base) =>
+    fetch(`${base}/protocol/openid-connect/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: settings.redirectUri,
+        client_id: settings.clientId,
+        client_secret: settings.clientSecret,
+        code_verifier: verifier,
+      }),
+      signal: AbortSignal.timeout(8000),
     }),
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) throw new Error(`token exchange failed: HTTP ${res.status}`);
+  );
+  if (!res.ok) {
+    // Keycloak's reason (invalid_client = wrong secret, invalid_grant = redirect URI or code problem) goes to the log.
+    const detail = await res.text().catch(() => '');
+    throw new Error(`token exchange failed: HTTP ${res.status} ${detail.slice(0, 300)}`);
+  }
   return (await res.json()) as { id_token: string; access_token: string };
 }
 
@@ -138,12 +164,13 @@ export async function exchangeCode(settings: SsoSettings, code: string, verifier
  * The issuer is the public one that Keycloak writes into tokens; the keys are fetched over the internal network.
  */
 export async function verifyIdToken(settings: SsoSettings, idToken: string, nonce: string): Promise<JWTPayload & { sub: string }> {
-  const jwks = createRemoteJWKSet(new URL(`${settings.internalIssuer}/protocol/openid-connect/certs`));
-  const { payload } = await jwtVerify(idToken, jwks, {
-    issuer: settings.issuer,
-    audience: settings.clientId,
-    algorithms: ['RS256'],
-  });
+  const { payload } = await withKeycloak(settings, (base) =>
+    jwtVerify(idToken, createRemoteJWKSet(new URL(`${base}/protocol/openid-connect/certs`)), {
+      issuer: settings.issuer,
+      audience: settings.clientId,
+      algorithms: ['RS256'],
+    }),
+  );
   if (typeof payload.sub !== 'string' || payload.nonce !== nonce) throw new Error('invalid id token');
   return payload as JWTPayload & { sub: string };
 }
