@@ -48,6 +48,19 @@ const schema = z.object({
   LOGIN_RATE_LIMIT: z.coerce.number().default(10),
   METRICS_TOKEN: z.string().min(16).optional(),
   // Case-insensitive; an invalid level would otherwise crash the logger at startup.
+  /** AFS single sign-on (Keycloak OIDC). When enabled, the settings below are required. */
+  AFS_SSO_ENABLED: looseBool,
+  AFS_OIDC_ISSUER: z.string().url().optional(),
+  /** Issuer as this API reaches Keycloak on the internal network. Defaults to AFS_OIDC_ISSUER. */
+  AFS_OIDC_INTERNAL_ISSUER: z.string().url().optional(),
+  AFS_OIDC_CLIENT_ID: z.string().min(1).optional(),
+  AFS_OIDC_CLIENT_SECRET: z.string().min(1).optional(),
+  /** Must match the redirect URI registered for the client in Keycloak. Defaults to API_PUBLIC_URL + /api/auth/sso/callback. */
+  AFS_OIDC_REDIRECT_URI: z.string().url().optional(),
+  /** Base URL of AFS Command Center, reached internally, for the access check. */
+  AFS_COMMAND_CENTER_URL: z.string().url().optional(),
+  AFS_SERVICE_TOKEN: z.string().min(16).optional(),
+  AFS_APP_SLUG: z.string().regex(/^[a-z0-9][a-z0-9-]{1,40}$/).default('imageunit'),
   LOG_LEVEL: z.preprocess((v) => (typeof v === 'string' ? v.trim().toLowerCase() : v), z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info')),
 });
 
@@ -63,6 +76,10 @@ export function loadConfig(input: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
   // An https public URL means TLS terminates at a reverse proxy in front of us: secure cookies and proxy trust follow.
+  if (parsed.data.AFS_SSO_ENABLED) {
+    const missing = ['AFS_OIDC_ISSUER', 'AFS_OIDC_CLIENT_ID', 'AFS_OIDC_CLIENT_SECRET', 'AFS_COMMAND_CENTER_URL', 'AFS_SERVICE_TOKEN'].filter((k) => !parsed.data[k as keyof typeof parsed.data]);
+    if (missing.length) throw new Error(`AFS_SSO_ENABLED=true requires: ${missing.join(', ')}`);
+  }
   const https = parsed.data.PUBLIC_WEB_URL.startsWith('https://');
   const config: Config = { ...parsed.data, COOKIE_SECURE: parsed.data.COOKIE_SECURE ?? https, TRUST_PROXY: parsed.data.TRUST_PROXY ?? https };
   if (config.NODE_ENV === 'production') {

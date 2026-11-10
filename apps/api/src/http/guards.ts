@@ -59,8 +59,9 @@ export async function loadSession(ctx: AppContext, req: FastifyRequest): Promise
   // Suspension takes effect immediately: a suspended user's live sessions stop working.
   if (row.user.status !== 'active') return null;
   req.sessionId = row.session.id;
-  // Sliding expiry: renew once half the lifetime is consumed.
-  if (row.session.expiresAt.getTime() - Date.now() < SESSION_TTL_MS / 2) {
+  // Sliding expiry: renew once half the lifetime is consumed. SSO sessions are not renewed, so access revoked in
+  // AFS Command Center ends at their fixed expiry.
+  if (!row.session.sso && row.session.expiresAt.getTime() - Date.now() < SESSION_TTL_MS / 2) {
     await ctx.db.update(sessions).set({ expiresAt: new Date(Date.now() + SESSION_TTL_MS) }).where(eq(sessions.id, row.session.id));
   }
   return row.user;

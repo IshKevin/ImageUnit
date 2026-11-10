@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "sso" boolean DEFAULT false NOT NULL;
