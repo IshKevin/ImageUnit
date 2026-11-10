@@ -69,8 +69,6 @@ services:
   api:
     <<: *app
     build: { context: ., dockerfile: apps/api/Dockerfile }
-    # `afs` reaches AFS Command Center (access check) and Keycloak privately; see the networks section.
-    networks: [default, afs]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
@@ -161,13 +159,6 @@ services:
     environment: { DOMAIN: "${DOMAIN:-localhost}" }
     volumes: [./ops/Caddyfile:/etc/caddy/Caddyfile:ro, caddy_data:/data, caddy_config:/config]
     depends_on: [web, api, s3]
-
-networks:
-  # Shared with the AFS Command Center stack, which creates it (deploy that first). Only the API joins it.
-  # Locally, compose.override.yaml replaces it with a private network so the stack runs on its own.
-  afs:
-    name: afs-internal
-    external: true
 
 volumes:
   pgdata: {}
