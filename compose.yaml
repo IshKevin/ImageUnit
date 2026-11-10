@@ -49,6 +49,16 @@ x-app: &app
     S3_FORCE_PATH_STYLE: "true"
     S3_ACCESS_KEY: ${S3_ACCESS_KEY:-imageunit}
     S3_SECRET_KEY: ${S3_SECRET_KEY:-imageunit-secret}
+    # AFS single sign-on (docs: AFS Command Center, docs/integrations/imageunit.md). Off unless AFS_SSO_ENABLED=true.
+    AFS_SSO_ENABLED: ${AFS_SSO_ENABLED:-false}
+    AFS_OIDC_ISSUER: ${AFS_OIDC_ISSUER:-}
+    AFS_OIDC_INTERNAL_ISSUER: ${AFS_OIDC_INTERNAL_ISSUER:-}
+    AFS_OIDC_CLIENT_ID: ${AFS_OIDC_CLIENT_ID:-}
+    AFS_OIDC_CLIENT_SECRET: ${AFS_OIDC_CLIENT_SECRET:-}
+    AFS_OIDC_REDIRECT_URI: ${AFS_OIDC_REDIRECT_URI:-}
+    AFS_COMMAND_CENTER_URL: ${AFS_COMMAND_CENTER_URL:-}
+    AFS_SERVICE_TOKEN: ${AFS_SERVICE_TOKEN:-}
+    AFS_APP_SLUG: ${AFS_APP_SLUG:-imageunit}
   depends_on:
     postgres: { condition: service_healthy }
     redis: { condition: service_healthy }
@@ -59,6 +69,8 @@ services:
   api:
     <<: *app
     build: { context: ., dockerfile: apps/api/Dockerfile }
+    # `afs` reaches AFS Command Center (access check) and Keycloak privately; see the networks section.
+    networks: [default, afs]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
@@ -95,7 +107,7 @@ services:
 
   # ---------- infrastructure ----------
   postgres:
-    image: postgres:18
+    image: postgres:18-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: imageunit
@@ -114,7 +126,7 @@ services:
   # S3-compatible object storage (SeaweedFS: Apache-2.0, actively maintained; replaces the archived MinIO).
   # Browsers upload/download directly through presigned URLs, so this must be reachable at S3_PUBLIC_ENDPOINT.
   s3:
-    image: chrislusf/seaweedfs:3.80
+    image: chrislusf/seaweedfs:latest
     restart: unless-stopped
     environment:
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-imageunit}
@@ -144,6 +156,13 @@ services:
     environment: { DOMAIN: "${DOMAIN:-localhost}" }
     volumes: [./ops/Caddyfile:/etc/caddy/Caddyfile:ro, caddy_data:/data, caddy_config:/config]
     depends_on: [web, api, s3]
+
+networks:
+  # Shared with the AFS Command Center stack, which creates it (deploy that first). Only the API joins it.
+  # Locally, compose.override.yaml replaces it with a private network so the stack runs on its own.
+  afs:
+    name: afs-internal
+    external: true
 
 volumes:
   pgdata: {}
