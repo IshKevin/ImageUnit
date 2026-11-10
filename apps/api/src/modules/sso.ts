@@ -114,11 +114,31 @@ export const ssoRoutes: FastifyPluginAsync = async (app) => {
             .from(users)
             .where(and(sql`lower(${users.email}) = ${email}`, isNull(users.oidcSub)))
         )[0];
-        if (!candidate) return { error: 'no_account' };
-        const [linked] = await tx.update(users).set({ oidcSub: claims.sub }).where(eq(users.id, candidate.id)).returning();
-        if (!linked) return { error: 'no_account' };
-        user = linked;
-        await audit(tx, system, { action: 'auth.sso_link', entityType: 'user', entityId: linked.id, targetUserId: linked.id });
+        if (candidate) {
+          const [linked] = await tx.update(users).set({ oidcSub: claims.sub }).where(eq(users.id, candidate.id)).returning();
+          if (!linked) return { error: 'no_account' };
+          user = linked;
+          await audit(tx, system, { action: 'auth.sso_link', entityType: 'user', entityId: linked.id, targetUserId: linked.id });
+        } else {
+          // No account yet: Command Center has granted ImageUnit with a role (checked above) and the email is verified,
+          // so create one. It has no password and signs in only through AFS SSO; the role is set below as usual.
+          // An email already used by an account linked to a different AFS identity is left for an admin to resolve.
+          const taken = (await tx.select({ id: users.id }).from(users).where(sql`lower(${users.email}) = ${email}`))[0];
+          if (taken) return { error: 'no_account' };
+          const [created] = await tx
+            .insert(users)
+            .values({ email, name: ssoDisplayName(claims, email), oidcSub: claims.sub, role, passwordHash: null })
+            .returning();
+          if (!created) return { error: 'no_account' };
+          user = created;
+          await audit(tx, system, {
+            action: 'user.sso_provisioned',
+            entityType: 'user',
+            entityId: created.id,
+            targetUserId: created.id,
+            after: { email, role },
+          });
+        }
       }
 
       const account = user;
@@ -177,4 +197,11 @@ export const ssoRoutes: FastifyPluginAsync = async (app) => {
 
 function stateCookieOptions(secure: boolean): Parameters<FastifyReply['setCookie']>[2] {
   return { httpOnly: true, sameSite: 'lax', secure, path: STATE_PATH, maxAge: SSO_STATE_TTL_MS / 1000 };
+}
+
+/** Display name for an account created at SSO sign-in: the AFS name, else given + family name, else the email. */
+function ssoDisplayName(claims: Record<string, unknown>, email: string): string {
+  const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const full = text(claims.name) || [text(claims.given_name), text(claims.family_name)].filter(Boolean).join(' ');
+  return (full || email).slice(0, 120);
 }

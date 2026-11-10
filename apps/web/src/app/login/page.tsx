@@ -12,7 +12,7 @@ const SSO_MESSAGES: Record<string, string> = {
   expired: 'Your AFS sign-in expired. Please try again.',
   not_assigned: 'Your AFS account is not assigned to ImageUnit. Contact an administrator.',
   unknown_role: 'Your ImageUnit role is not set up yet. Contact an administrator.',
-  no_account: 'No ImageUnit account is linked to this AFS account. Contact an administrator.',
+  no_account: 'This AFS account cannot be linked: its email is already used by another ImageUnit account. Contact an administrator.',
   unverified_email: 'Your AFS email address must be verified before it can be linked.',
   disabled: 'This ImageUnit account is not active. Contact an administrator.',
   unavailable: 'AFS sign-in is temporarily unavailable. Try again shortly.',
