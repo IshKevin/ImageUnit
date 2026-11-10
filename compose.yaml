@@ -145,7 +145,10 @@ services:
       - -master.volumeSizeLimitMB=1024
     volumes: [s3data:/data]
     # Any HTTP answer (even 403 for an unsigned request) means the S3 gateway is listening.
-    healthcheck: { test: ["CMD-SHELL", "wget -q -S --spider http://localhost:8333/ 2>&1 | grep -q 'HTTP/'"], interval: 5s, timeout: 5s, retries: 20, start_period: 10s }
+    # With real data, SeaweedFS loads every volume's index before the gateway answers, which took longer than the old
+    # ~110 s window on the production host and failed the deploy. Allow up to 5 minutes to start, then ~5 minutes of
+    # failed checks before the container is called unhealthy. Probes during start_period do not count as failures.
+    healthcheck: { test: ["CMD-SHELL", "wget -q -S --spider http://localhost:8333/ 2>&1 | grep -q 'HTTP/'"], interval: 10s, timeout: 5s, retries: 30, start_period: 300s }
 
   # ---------- HTTPS reverse proxy (production only: --profile https) ----------
   caddy:
