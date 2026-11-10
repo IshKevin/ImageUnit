@@ -6,3 +6,9 @@ services:
   postgres: { ports: ["${BIND_ADDR:-127.0.0.1}:5440:5432"] }
   redis:    { ports: ["${BIND_ADDR:-127.0.0.1}:6390:6379"] }
   s3:       { ports: ["${BIND_ADDR:-127.0.0.1}:8333:8333"] }
+
+# Production joins the AFS stack's shared `afs-internal` network (external). Locally there is none, so use a private one.
+networks:
+  afs:
+    name: imageunit-afs-local
+    external: false
