@@ -39,7 +39,10 @@ export async function createContext() {
   const redis = createRedis(config.REDIS_URL);
   redis.on('error', (err) => log.error({ err: err.message }, 'redis error'));
   const storage = createS3Storage(config);
-  await retry('object storage', () => storage.ensureReady(), { log: (m) => log.warn(m) });
+  // Storage is checked in the background so an object-storage outage does not keep the API (sign-in, browsing) down.
+  // Until it is ready, /ready reports storage: false and uploads/downloads fail; the bucket is created once it answers.
+  void retry('object storage', () => storage.ensureReady(), { attempts: Number.MAX_SAFE_INTEGER, delayMs: 5000, log: (m) => log.warn(m) })
+    .then(() => log.info('object storage ready'));
   const ctx: AppContext = { config, db, storage, redis, queues: createQueues(redis), log };
   return { ctx, pool, redis };
 }
