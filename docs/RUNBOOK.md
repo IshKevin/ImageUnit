@@ -68,6 +68,7 @@ Permissions can be adjusted per user in **Users**; admin-only permissions (delet
 * `GET /health` (liveness), `GET /ready` (DB + storage), `GET /metrics` (Prometheus; set `METRICS_TOKEN`).
 * Console → **System health**: dependency status, queue depth, failed/stuck photos, abandoned uploads, account lockouts. Failures also raise administrator notifications (processing failures, storage threshold, retention reviews).
 * Suggested alerts: `/ready` non-200 for 2 min; `http_request_duration_seconds` p95 > 1s; queue `waiting` growing for 15 min; any `failed` photos; storage ≥ 85%.
+* Past incidents and their lessons: [`docs/incidents/`](incidents/). For storage (SeaweedFS) failures, read [2026-11-10 photo storage outage](incidents/2026-11-10-image-storage-outage.md) first.
 
 ## Retention lifecycle
 `draft → active → expired → archived → scheduled_for_deletion → (admin) permanent delete`.
