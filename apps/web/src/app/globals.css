@@ -4,55 +4,132 @@
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-fg: var(--fg);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
   --color-accent-fg: var(--accent-fg);
   --color-danger: var(--danger);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+  --animate-fade-in: fade-in 160ms ease-out;
+  --animate-pop-in: pop-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Light theme (default). */
 :root {
-  --bg: #f7f7f8;
+  color-scheme: light;
+  --bg: #f6f7f9;
   --surface: #ffffff;
-  --surface-2: #f0f0f3;
-  --border: #e3e3e8;
-  --fg: #16161d;
-  --muted: #6b6b78;
-  --accent: #4f46e5;
+  --surface-2: #f1f3f6;
+  --surface-3: #e7eaf0;
+  --border: #e4e7ec;
+  --border-strong: #cfd4dc;
+  --fg: #101828;
+  --muted: #667085;
+  --accent: #5b4cf0;
+  --accent-strong: #4a3bd6;
   --accent-fg: #ffffff;
-  --danger: #dc2626;
-  --success: #16a34a;
-  --warning: #d97706;
+  --danger: #d92d20;
+  --success: #079455;
+  --warning: #dc6803;
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
+  --shadow-pop: 0 12px 32px -8px rgb(16 24 40 / 0.18), 0 4px 8px -4px rgb(16 24 40 / 0.08);
 }
 
+/* Dark theme: follows the system unless the person picked light, or picked dark explicitly. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d0d12;
-    --surface: #15151c;
-    --surface-2: #1d1d26;
-    --border: #2a2a36;
-    --fg: #ececf1;
-    --muted: #9a9aa8;
-    --accent: #818cf8;
-    --accent-fg: #0d0d12;
-    --danger: #f87171;
-    --success: #4ade80;
-    --warning: #fbbf24;
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #0b0c10;
+    --surface: #13151b;
+    --surface-2: #1a1d25;
+    --surface-3: #232733;
+    --border: #262a35;
+    --border-strong: #353a48;
+    --fg: #eceef3;
+    --muted: #98a0b3;
+    --accent: #8b7fff;
+    --accent-strong: #a399ff;
+    --accent-fg: #0b0c10;
+    --danger: #f97066;
+    --success: #47cd89;
+    --warning: #fdb022;
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3);
+    --shadow-pop: 0 16px 40px -8px rgb(0 0 0 / 0.6), 0 4px 8px -4px rgb(0 0 0 / 0.4);
   }
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b0c10;
+  --surface: #13151b;
+  --surface-2: #1a1d25;
+  --surface-3: #232733;
+  --border: #262a35;
+  --border-strong: #353a48;
+  --fg: #eceef3;
+  --muted: #98a0b3;
+  --accent: #8b7fff;
+  --accent-strong: #a399ff;
+  --accent-fg: #0b0c10;
+  --danger: #f97066;
+  --success: #47cd89;
+  --warning: #fdb022;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-pop: 0 16px 40px -8px rgb(0 0 0 / 0.6), 0 4px 8px -4px rgb(0 0 0 / 0.4);
 }
 
 body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss01';
   -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Native <dialog> open animation. */
+dialog[open] {
+  animation: pop-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+dialog::backdrop {
+  background: rgb(10 12 18 / 0.55);
+  backdrop-filter: blur(3px);
+  animation: fade-in 160ms ease-out;
+}
+
+/* Thin, quiet scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

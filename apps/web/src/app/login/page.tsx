@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Aperture } from 'lucide-react';
+import { Aperture, ArrowRight, Images, KeyRound, ShieldCheck, Share2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { ErrorNote, Button, Field, Input } from '@/components/ui';
@@ -50,50 +50,85 @@ export default function LoginPage() {
     },
   });
 
-  return (
-    <main className="grid min-h-screen place-items-center px-4">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          login.mutate();
-        }}
-        className="w-full max-w-sm space-y-5 rounded-2xl border border-border bg-surface p-8"
+  const sso = ssoEnabled && (
+    <>
+      <a
+        href="/api/auth/sso/login?next=/console"
+        className="group inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-border bg-surface text-sm font-medium shadow-card transition-all hover:border-border-strong hover:bg-surface-2 active:scale-[0.99]"
       >
-        <div className="flex items-center gap-2">
-          <Aperture className="size-6 text-accent" aria-hidden />
-          <span className="text-lg font-semibold">ImageUnit</span>
+        <KeyRound className="size-4 text-accent" aria-hidden />
+        Continue with AFS SSO
+        <ArrowRight className="size-4 text-muted transition-transform group-hover:translate-x-0.5" aria-hidden />
+      </a>
+      <div className="flex items-center gap-3 text-xs text-muted" aria-hidden>
+        <span className="h-px flex-1 bg-border" />
+        or sign in with email
+        <span className="h-px flex-1 bg-border" />
+      </div>
+    </>
+  );
+
+  return (
+    <main className="grid min-h-screen lg:grid-cols-[1.05fr_1fr]">
+      {/* Brand panel (large screens). */}
+      <section aria-hidden className="relative hidden overflow-hidden bg-[#0f0d24] p-12 text-white lg:flex lg:flex-col">
+        <div className="absolute -left-32 -top-32 size-[28rem] rounded-full bg-accent/50 blur-[120px]" />
+        <div className="absolute -bottom-40 right-0 size-[30rem] rounded-full bg-fuchsia-500/30 blur-[120px]" />
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,rgb(255_255_255/0.04)_1px,transparent_1px),linear-gradient(to_bottom,rgb(255_255_255/0.04)_1px,transparent_1px)] bg-[size:48px_48px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_75%)]" />
+        <div className="relative flex items-center gap-2.5">
+          <span className="grid size-9 place-items-center rounded-lg bg-white/10 ring-1 ring-white/20 backdrop-blur"><Aperture className="size-5" /></span>
+          <span className="text-lg font-semibold tracking-tight">ImageUnit</span>
         </div>
-        <div>
-          <h1 className="text-xl font-semibold">Sign in</h1>
-          <p className="mt-1 text-sm text-muted">Photographers and administrators</p>
+        <div className="relative mt-auto max-w-md">
+          <h2 className="text-4xl font-semibold leading-tight tracking-tight text-balance">Every event, beautifully delivered.</h2>
+          <p className="mt-4 text-base leading-relaxed text-white/70">Upload, organise and share event photography with galleries your audience will love.</p>
+          <ul className="mt-10 space-y-4 text-sm text-white/80">
+            {[
+              { icon: Images, text: 'Fast uploads with automatic previews' },
+              { icon: Share2, text: 'Public, unlisted or password-protected galleries' },
+              { icon: ShieldCheck, text: 'Role-based access for your whole team' },
+            ].map(({ icon: Icon, text }) => (
+              <li key={text} className="flex items-center gap-3">
+                <span className="grid size-8 place-items-center rounded-lg bg-white/10 ring-1 ring-white/15"><Icon className="size-4" /></span>
+                {text}
+              </li>
+            ))}
+          </ul>
         </div>
-        <Field label="Email">
-          <Input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
-        </Field>
-        <Field label="Password">
-          <Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
-        </Field>
-        <ErrorNote error={login.error} />
-        {ssoMessage && <p role="alert" className="text-sm text-danger">{ssoMessage}</p>}
-        <Button type="submit" variant="primary" className="w-full" loading={login.isPending}>
-          Sign in
-        </Button>
-        {ssoEnabled && (
-          <>
-            <div className="flex items-center gap-3 text-xs text-muted" aria-hidden>
-              <span className="h-px flex-1 bg-border" />
-              or
-              <span className="h-px flex-1 bg-border" />
-            </div>
-            <a
-              href="/api/auth/sso/login?next=/console"
-              className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-border bg-surface text-sm font-medium hover:bg-surface-2"
-            >
-              Sign in with AFS SSO
-            </a>
-          </>
-        )}
-      </form>
+        <p className="relative mt-12 text-xs text-white/40">© {new Date().getFullYear()} ImageUnit</p>
+      </section>
+
+      <section className="flex items-center justify-center px-4 py-12 sm:px-8">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            login.mutate();
+          }}
+          className="w-full max-w-sm animate-pop-in space-y-5"
+        >
+          <div className="flex items-center gap-2.5 lg:hidden">
+            <span className="grid size-9 place-items-center rounded-lg bg-gradient-to-br from-accent to-fuchsia-500 text-white shadow-sm shadow-accent/30"><Aperture className="size-5" aria-hidden /></span>
+            <span className="text-lg font-semibold tracking-tight">ImageUnit</span>
+          </div>
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-[28px]">Welcome back</h1>
+            <p className="mt-1.5 text-sm text-muted">Sign in to manage your events and galleries.</p>
+          </div>
+          {ssoMessage && <p role="alert" className="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2.5 text-sm text-danger">{ssoMessage}</p>}
+          {sso}
+          <Field label="Email">
+            <Input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.org" className="h-11" autoFocus />
+          </Field>
+          <Field label="Password">
+            <Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="h-11" />
+          </Field>
+          <ErrorNote error={login.error} />
+          <Button type="submit" variant="primary" size="lg" className="w-full" loading={login.isPending}>
+            Sign in
+          </Button>
+          <p className="text-center text-xs text-muted">For photographers and administrators. Need access? Contact your administrator.</p>
+        </form>
+      </section>
     </main>
   );
 }
