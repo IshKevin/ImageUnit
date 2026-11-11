@@ -62,9 +62,7 @@ x-app: &app
   depends_on:
     postgres: { condition: service_healthy }
     redis: { condition: service_healthy }
-    # TEMPORARY (2026-11-10): s3 crashes at startup on the production host. Waiting only for it to start lets the rest of
-    # ImageUnit come up and keeps the s3 container (and its log) in Coolify. Restore service_healthy once s3 is fixed.
-    s3: { condition: service_started }
+    s3: { condition: service_healthy }
 
 services:
   # ---------- application ----------
@@ -74,8 +72,8 @@ services:
     # `afs` reaches AFS Command Center (access check) and Keycloak privately; see the networks section.
     networks: [default, afs]
     healthcheck:
-      # TEMPORARY (2026-11-10): /health (process up) instead of /ready (database + storage), while s3 is being fixed.
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      # /ready checks the database and object storage, so a deploy with broken storage fails instead of going live.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 6
