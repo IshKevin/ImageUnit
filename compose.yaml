@@ -129,10 +129,14 @@ services:
   # S3-compatible object storage (SeaweedFS: Apache-2.0, actively maintained; replaces the archived MinIO).
   # Browsers upload/download directly through presigned URLs, so this must be reachable at S3_PUBLIC_ENDPOINT.
   s3:
-    # Pinned so a deploy never pulls a surprise version under existing data. 4.53 was tested opening data written by
-    # 4.48 (the version first deployed). Upgrade deliberately; never pin an older version than the one running.
-    image: chrislusf/seaweedfs:4.53
+    # Pinned so a deploy never pulls a surprise version under existing data. 4.48 is the version production was first
+    # deployed with (via :latest). Never use a 3.x image here: 3.x runs as root and leaves root-owned files in /data,
+    # after which every 4.x start fails with "raft: Initialization error: open /data/m9333/log: permission denied".
+    image: chrislusf/seaweedfs:4.48
     restart: unless-stopped
+    # 4.x runs as the 'seaweed' user, and its entrypoint repairs ownership only when the /data folder itself is wrong,
+    # not files inside it. Fix any file not owned by seaweed (a no-op on healthy data), then start normally.
+    entrypoint: ["/bin/sh", "-c", "find /data ! -user seaweed -exec chown seaweed:seaweed {} + ; exec /entrypoint.sh \"$$@\"", "--"]
     environment:
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-imageunit}
       AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-imageunit-secret}
