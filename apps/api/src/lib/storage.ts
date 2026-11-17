@@ -12,7 +12,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 import type { Config } from '../config.js';
 
 export interface ObjectInfo {
@@ -34,6 +34,8 @@ export interface Storage {
   /** Streaming variants for large files (videos): never hold the whole object in memory. */
   downloadToFile(key: string, filePath: string): Promise<void>;
   uploadFile(key: string, filePath: string, contentType: string): Promise<void>;
+  /** Opens an object for streaming, with its exact size. */
+  stream(key: string): Promise<{ body: Readable; size: number }>;
   delete(keys: string[]): Promise<void>;
   ping(): Promise<boolean>;
 }
@@ -108,6 +110,11 @@ export function createS3Storage(config: Config): Storage {
       const { size } = await stat(filePath);
       await internal.send(new PutObjectCommand({ Bucket, Key: key, Body: createReadStream(filePath), ContentLength: size, ContentType: contentType }));
     },
+    async stream(key) {
+      const res = await internal.send(new GetObjectCommand({ Bucket, Key: key }));
+      if (!res.Body || res.ContentLength == null) throw new Error(`object ${key} has no body`);
+      return { body: res.Body as Readable, size: res.ContentLength };
+    },
     async delete(keys) {
       if (keys.length === 0) return;
       if (keys.length === 1) {
@@ -162,6 +169,11 @@ export function createMemoryStorage(): Storage & { objects: Map<string, { body: 
     },
     async uploadFile(key, filePath, contentType) {
       objects.set(key, { body: await readFile(filePath), contentType });
+    },
+    async stream(key) {
+      const o = objects.get(key);
+      if (!o) throw new Error(`missing object ${key}`);
+      return { body: Readable.from([o.body]), size: o.body.length };
     },
     async delete(keys) {
       for (const k of keys) objects.delete(k);

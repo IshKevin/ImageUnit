@@ -75,3 +75,16 @@ export async function track(ctx: AppContext, req: FastifyRequest, input: { event
     ctx.log.warn({ err }, 'analytics insert failed');
   }
 }
+
+/** Records one download per photo of a bulk (ZIP) download in a single insert. */
+export async function trackDownloads(ctx: AppContext, req: FastifyRequest, eventId: string, photoIds: string[]) {
+  if (photoIds.length === 0) return;
+  const hash = visitorHash(ctx.config.SESSION_SECRET, req.ip, req.headers['user-agent'] ?? '');
+  try {
+    for (let i = 0; i < photoIds.length; i += 1000) {
+      await ctx.db.insert(analyticsEvents).values(photoIds.slice(i, i + 1000).map((photoId) => ({ eventId, photoId, type: 'download' as const, source: 'web' as const, visitorHash: hash })));
+    }
+  } catch (err) {
+    ctx.log.warn({ err }, 'analytics insert failed');
+  }
+}

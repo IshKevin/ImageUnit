@@ -86,6 +86,16 @@ export function GalleryClient({ slug, event }: { slug: string; event: PublicEven
             <button onClick={share} className={clsx('inline-flex h-10 items-center gap-2 rounded-full px-5 text-sm font-medium transition-all active:scale-[0.98]', event.coverUrl ? 'bg-white text-black hover:bg-white/90' : 'bg-accent text-accent-fg shadow-sm shadow-accent/25 hover:bg-accent-strong')}>
               <Share2 className="size-4" /> Share gallery
             </button>
+            {event.downloadPolicy !== 'disabled' && total > 0 && (
+              // One ZIP of everything downloadable, or of the gallery currently selected below.
+              <a
+                href={`/api/public/events/${slug}/download${galleryId ? `?galleryId=${galleryId}` : ''}`}
+                download
+                className={clsx('inline-flex h-10 items-center gap-2 rounded-full px-5 text-sm font-medium ring-1 transition-all active:scale-[0.98]', event.coverUrl ? 'bg-black/30 text-white ring-white/40 backdrop-blur hover:bg-black/45' : 'bg-surface text-fg ring-border hover:ring-border-strong')}
+              >
+                <Download className="size-4" /> {galleryId ? `Download “${event.galleries.find((g) => g.id === galleryId)?.name ?? 'gallery'}”` : 'Download all'}
+              </a>
+            )}
             {event.expiresAt && <span className={clsx('inline-flex items-center gap-1.5 text-xs', event.coverUrl ? 'text-white/75' : 'text-muted')}><Clock className="size-3.5" aria-hidden />Available until {date(event.expiresAt)}</span>}
           </div>
         </div>

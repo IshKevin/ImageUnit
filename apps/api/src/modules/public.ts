@@ -10,7 +10,8 @@ import { croppedCoverKey } from '../lib/cover.js';
 import { AppError, forbidden, unauthorized } from '../lib/errors.js';
 import { downloadName } from '../lib/media.js';
 import { textSearch } from '../lib/media-query.js';
-import { issueGrant, resolvePublicEvent, resolvePublicPhoto, track } from '../lib/public-access.js';
+import { issueGrant, resolvePublicEvent, resolvePublicPhoto, track, trackDownloads } from '../lib/public-access.js';
+import { safeZipName, zipStream, type ZipEntry } from '../lib/zip.js';
 
 // Verified against for events without a password so response timing is uniform.
 const DUMMY = await hashPassword('timing-equaliser');
@@ -164,6 +165,64 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
       return reply.redirect(url, 302);
     });
   }
+
+  /**
+   * The whole gallery (or one of its galleries) as a single ZIP. Each item follows its own download
+   * policy: originals where "full" applies, previews where "preview" applies, nothing where disabled.
+   * Files stream from storage straight into the response, one at a time.
+   */
+  app.get('/public/events/:slug/download', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
+    const q = parse(z.object({ galleryId: z.string().uuid().optional() }), req.query);
+    const ev = await resolvePublicEvent(ctx, req, (req.params as { slug: string }).slug);
+    if (ev.downloadPolicy === 'disabled') throw forbidden('Downloads are disabled for this gallery');
+    const conds: SQL[] = [eq(photos.eventId, ev.id), eq(photos.status, 'ready'), eq(photos.isHidden, false), sql`(${photos.galleryId} is null or ${galleries.isVisible})`];
+    if (q.galleryId) conds.push(eq(photos.galleryId, q.galleryId));
+    const rows = await ctx.db
+      .select({ p: photos, g: galleries })
+      .from(photos)
+      .leftJoin(galleries, eq(galleries.id, photos.galleryId))
+      .where(and(...conds))
+      .orderBy(asc(galleries.sortOrder), asc(photos.sortOrder), asc(photos.takenAt), asc(photos.createdAt), asc(photos.id));
+
+    // One folder per gallery when the archive spans several of them.
+    const folders = !q.galleryId && new Set(rows.map((r) => r.g?.id ?? '')).size > 1;
+    const used = new Set<string>();
+    const unique = (path: string) => {
+      let candidate = path;
+      const dot = path.lastIndexOf('.');
+      const [stem, ext] = dot > path.lastIndexOf('/') ? [path.slice(0, dot), path.slice(dot)] : [path, ''];
+      for (let n = 2; used.has(candidate.toLowerCase()); n++) candidate = `${stem} (${n})${ext}`;
+      used.add(candidate.toLowerCase());
+      return candidate;
+    };
+    const items = rows.flatMap(({ p, g }) => {
+      const policy = effectiveDownloadPolicy(ev, g, p);
+      if (policy === 'disabled') return [];
+      const full = policy === 'full';
+      const key = full ? p.originalKey : p.previewKey;
+      if (!key) return [];
+      const file = safeZipName(downloadName(p, full ? undefined : p.mediaType === 'video' ? 'mp4' : 'jpg'));
+      return [{ id: p.id, key, name: unique(folders ? `${safeZipName(g?.name ?? 'Photos')}/${file}` : file), date: p.takenAt ?? p.createdAt }];
+    });
+    if (items.length === 0) throw forbidden('Nothing in this gallery can be downloaded');
+
+    await trackDownloads(ctx, req, ev.id, items.map((i) => i.id));
+    const gallery = q.galleryId ? rows[0]?.g?.name : null;
+    const zipName = `${safeZipName(gallery ? `${ev.name} - ${gallery}` : ev.name)}.zip`;
+    const entries: ZipEntry[] = items.map((i) => ({ name: i.name, date: i.date, open: () => ctx.storage.stream(i.key) }));
+    const stream = zipStream(entries);
+    // A failure mid-archive cannot become an error response any more; cut the connection so the
+    // browser reports an incomplete download instead of saving a truncated file as if complete.
+    stream.on('error', (err) => {
+      req.log.error({ err, eventId: ev.id }, 'gallery zip failed');
+      reply.raw.destroy(err);
+    });
+    reply
+      .header('content-type', 'application/zip')
+      .header('content-disposition', `attachment; filename="${zipName.replace(/[^\x20-\x7e]|"/g, '_')}"; filename*=UTF-8''${encodeURIComponent(zipName)}`)
+      .header('cache-control', 'no-store');
+    return reply.send(stream);
+  });
 
   app.post('/public/photos/:id/view', { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (req, reply) => {
     const { photo, event } = await resolvePublicPhoto(ctx, req, (req.params as { id: string }).id);

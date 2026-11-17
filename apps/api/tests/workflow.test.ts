@@ -1,3 +1,4 @@
+import { crc32 as zlibCrc32 } from 'node:zlib';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { events, notifications, photos } from '../src/db/schema.js';
@@ -8,6 +9,32 @@ import { createTestApp, makeEvent, readyPhoto, session, testImage, uploadPhoto, 
 let t: TestApp;
 beforeAll(async () => { t = await createTestApp(); });
 afterAll(async () => { await t.close(); });
+
+/** Reads a stored (uncompressed) ZIP via its central directory, checking each entry's CRC. */
+function readZip(buf: Buffer): Map<string, Buffer> {
+  const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  expect(eocd).toBeGreaterThan(-1);
+  const count = buf.readUInt16LE(eocd + 10);
+  let at = buf.readUInt32LE(eocd + 16);
+  const out = new Map<string, Buffer>();
+  for (let i = 0; i < count; i++) {
+    expect(buf.readUInt32LE(at)).toBe(0x02014b50);
+    const crc = buf.readUInt32LE(at + 16);
+    const size = buf.readUInt32LE(at + 20);
+    const nameLen = buf.readUInt16LE(at + 28);
+    const extraLen = buf.readUInt16LE(at + 30);
+    const commentLen = buf.readUInt16LE(at + 32);
+    const local = buf.readUInt32LE(at + 42);
+    const name = buf.subarray(at + 46, at + 46 + nameLen).toString('utf8');
+    expect(buf.readUInt32LE(local)).toBe(0x04034b50);
+    const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    const data = buf.subarray(start, start + size);
+    expect(zlibCrc32(data)).toBe(crc);
+    out.set(name, Buffer.from(data));
+    at += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
 
 const publish = async (owner: Awaited<ReturnType<typeof session>>, id: string) => (await owner.post(`/api/events/${id}/publish`)).json().event;
 
@@ -195,6 +222,43 @@ describe('publishing and public galleries', () => {
     await owner.patch(`/api/events/${ev.id}`, { downloadPolicy: 'disabled' });
     await owner.patch(`/api/galleries/${gallery.id}`, { downloadPolicy: 'full' });
     expect((await dl()).statusCode).toBe(403);
+  });
+
+  it('downloads the whole gallery as one ZIP, each item at its own policy, with one folder per gallery', async () => {
+    const owner = await session(t);
+    const ev = await makeEvent(owner, { downloadPolicy: 'full' });
+    const a = await readyPhoto(t, owner, ev.id);
+    const b = await readyPhoto(t, owner, ev.id); // same file name as a: must not overwrite it in the ZIP
+    const c = await readyPhoto(t, owner, ev.id);
+    const hidden = await readyPhoto(t, owner, ev.id);
+    await owner.patch(`/api/photos/${hidden}`, { isHidden: true });
+    await owner.patch(`/api/photos/${c}`, { downloadPolicy: 'preview' });
+    const extra = (await owner.post(`/api/events/${ev.id}/galleries`, { name: 'Ceremony' })).json().gallery;
+    await owner.patch(`/api/photos/${b}`, { galleryId: extra.id });
+    await publish(owner, ev.id);
+    const rows = await t.ctx.db.select().from(photos).where(eq(photos.eventId, ev.id));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    const zip = async (query = '') => t.app.inject({ method: 'GET', url: `/api/public/events/${ev.slug}/download${query}` });
+    const res = await zip();
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/zip');
+    expect(res.headers['content-disposition']).toContain('.zip');
+    const files = readZip(res.rawPayload);
+    expect([...files.keys()].sort()).toEqual(['Ceremony/IMG_0001.jpg', 'General/IMG_0001 (2).jpg', 'General/IMG_0001.jpg'].sort());
+    // Full-policy items are the untouched originals; the preview-policy one is the preview.
+    const general = [files.get('General/IMG_0001.jpg')!, files.get('General/IMG_0001 (2).jpg')!];
+    expect(general.some((f) => f.equals(t.storage.objects.get(byId.get(a)!.originalKey)!.body))).toBe(true);
+    expect(general.some((f) => f.equals(t.storage.objects.get(byId.get(c)!.previewKey!)!.body))).toBe(true);
+    expect(files.get('Ceremony/IMG_0001.jpg')!.equals(t.storage.objects.get(byId.get(b)!.originalKey)!.body)).toBe(true);
+
+    // One gallery only: no folders.
+    const one = readZip((await zip(`?galleryId=${extra.id}`)).rawPayload);
+    expect([...one.keys()]).toEqual(['IMG_0001.jpg']);
+
+    // Disabled downloads: no archive.
+    await owner.patch(`/api/events/${ev.id}`, { downloadPolicy: 'disabled' });
+    expect((await zip()).statusCode).toBe(403);
   });
 
   it('expired events are closed immediately (even before the scheduler runs) and keep their photographs', async () => {
