@@ -103,6 +103,24 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
     return views.mediaOf(req.apiClient!, { ...parse(mediaQuery, req.query), collectionId: c.id });
   });
 
+  // A collection's own cover files (uploaded or cropped), behind the same signed-link checks as media.
+  app.get('/v1/collections/:id/cover/:size', async (req, reply) => {
+    const { id, size } = parse(z.object({ id: z.string().uuid(), size: z.enum(['thumbnail', 'preview']) }), req.params);
+    const q = parse(z.object({ c: z.string().uuid(), exp: z.coerce.number(), sig: z.string().min(10).max(100) }), req.query);
+    if (!verifyMedia(ctx.config.SESSION_SECRET, { photoId: `collection:${id}`, kind: `cover-${size}`, clientId: q.c, exp: q.exp }, q.sig)) throw forbidden('Invalid or expired media link');
+    const [client] = await ctx.db.select().from(apiClients).where(eq(apiClients.id, q.c));
+    if (!client || client.status !== 'active') throw forbidden('Access revoked');
+    if (!client.scopes.includes('images:read')) throw forbidden('Missing scope: images:read');
+    await rateLimit(client);
+    usage.record(client.id);
+    const c = await views.loadCollectionRow(client, id);
+    const cover = await views.collectionCover(client, c);
+    const key = cover?.own ? (size === 'thumbnail' ? c.coverThumbKey : c.coverPreviewKey) : null;
+    if (!key) throw notFound('No cover image');
+    reply.header('cache-control', 'private, max-age=60');
+    return reply.redirect(await ctx.storage.presignDownload(key, { ttlSeconds: 120 }), 302);
+  });
+
   // Media is delivered through signed, expiring URLs. Each hit re-validates the credential, the event and the download policy.
   app.get('/v1/media/:id/:kind', async (req, reply) => {
     const { id, kind } = parse(z.object({ id: z.string().uuid(), kind: z.enum(['thumbnail', 'preview', 'download', 'cover-thumbnail', 'cover-preview']) }), req.params);

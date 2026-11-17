@@ -5,7 +5,7 @@ import clsx from 'clsx';
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { toast } from 'sonner';
 import { Button, ErrorNote, Modal } from '../ui';
-import { put, type CoverCrop, type EventItem } from '@/lib/api';
+import type { CoverCrop } from '@/lib/api';
 
 const ASPECTS = [
   { id: '16:9', label: '16:9', value: 16 / 9 },
@@ -38,29 +38,42 @@ function matchAspect(c: CoverCrop, imgRatio: number): AspectId {
 
 type Drag = { mode: 'move'; startX: number; startY: number; start: CoverCrop } | { mode: 'resize'; ax: number; ay: number };
 
-export function CoverCropModal({ event, open, onClose, onSaved }: { event: EventItem; open: boolean; onClose: () => void; onSaved: () => void }) {
-  const source = event.coverSource;
+interface CoverCropModalProps {
+  open: boolean;
+  onClose: () => void;
+  /** The whole, uncropped picture. */
+  sourceUrl: string;
+  /** The crop currently applied to this picture, if any. */
+  savedCrop: CoverCrop | null;
+  /** Saves a crop, or null for the whole picture. */
+  onSave: (crop: CoverCrop | null) => Promise<unknown>;
+  onSaved: () => void;
+  /** Where the cover appears, for the explanation at the top. */
+  usedIn: string;
+}
+
+/** Crop / reposition editor shared by event and collection covers. */
+export function CoverCropModal({ open, onClose, sourceUrl, savedCrop, onSave, onSaved, usedIn }: CoverCropModalProps) {
   const frame = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
-  const [imgRatio, setImgRatio] = useState<number | null>(source?.width && source.height ? source.width / source.height : null);
+  const [imgRatio, setImgRatio] = useState<number | null>(null);
   const [aspect, setAspect] = useState<AspectId>('16:9');
   const [crop, setCrop] = useState<CoverCrop>({ x: 0, y: 0, width: 1, height: 1 });
 
   // Start from the saved crop when it belongs to this photo, otherwise the largest centred 16:9 box.
   useEffect(() => {
     if (!open || !imgRatio) return;
-    const saved = event.coverCrop && event.coverPhotoId === source?.photoId ? event.coverCrop : null;
-    if (saved) {
-      setCrop(saved);
-      setAspect(matchAspect(saved, imgRatio));
+    if (savedCrop) {
+      setCrop(savedCrop);
+      setAspect(matchAspect(savedCrop, imgRatio));
     } else {
       setAspect('16:9');
       setCrop(fitAspect({ x: 0, y: 0, width: 1, height: 1 }, 16 / 9, imgRatio));
     }
-  }, [open, imgRatio, event.coverCrop, event.coverPhotoId, source?.photoId]);
+  }, [open, imgRatio, savedCrop]);
 
   const save = useMutation({
-    mutationFn: (c: CoverCrop | null) => put(`/events/${event.id}/cover-crop`, { photoId: source!.photoId, crop: c }),
+    mutationFn: onSave,
     onSuccess: (_d, c) => {
       toast.success(c ? 'Cover cropped' : 'Cover reset to the full photo');
       onSaved();
@@ -68,7 +81,6 @@ export function CoverCropModal({ event, open, onClose, onSaved }: { event: Event
     },
   });
 
-  if (!source) return null;
   const aspectValue = ASPECTS.find((a) => a.id === aspect)!.value;
 
   const pointAt = (e: PointerEvent) => {
@@ -158,7 +170,7 @@ export function CoverCropModal({ event, open, onClose, onSaved }: { event: Event
   return (
     <Modal open={open} onClose={onClose} title="Crop cover image" wide>
       <div className="space-y-4">
-        <p className="text-sm text-muted">Drag the frame to reposition it and drag a corner to resize it. The cropped cover is what the public gallery, the event list and connected websites show. The original photo is not changed.</p>
+        <p className="text-sm text-muted">Drag the frame to reposition it and drag a corner to resize it. The cropped cover is what {usedIn} show. The original picture is not changed.</p>
 
         <div role="radiogroup" aria-label="Aspect ratio" className="flex flex-wrap gap-1.5">
           {ASPECTS.map((a) => (
@@ -179,8 +191,8 @@ export function CoverCropModal({ event, open, onClose, onSaved }: { event: Event
           <div ref={frame} className="relative inline-block touch-none select-none overflow-hidden" onPointerMove={onMove} onPointerUp={endDrag} onPointerCancel={endDrag}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={source.url}
-              alt="Cover photo to crop"
+              src={sourceUrl}
+              alt="Cover picture to crop"
               draggable={false}
               className="block max-h-[60vh] max-w-full"
               onLoad={(e) => { const i = e.currentTarget; if (i.naturalWidth && i.naturalHeight) setImgRatio(i.naturalWidth / i.naturalHeight); }}
@@ -207,8 +219,8 @@ export function CoverCropModal({ event, open, onClose, onSaved }: { event: Event
 
         <ErrorNote error={save.error} />
         <div className="flex flex-col-reverse gap-2 border-t border-border pt-4 sm:flex-row sm:items-center">
-          {event.coverCrop && event.coverPhotoId === source.photoId && (
-            <Button variant="ghost" disabled={save.isPending} loading={save.isPending && save.variables === null} onClick={() => save.mutate(null)}>Use the full photo</Button>
+          {savedCrop && (
+            <Button variant="ghost" disabled={save.isPending} loading={save.isPending && save.variables === null} onClick={() => save.mutate(null)}>Use the whole picture</Button>
           )}
           <span className="hidden flex-1 sm:block" />
           <Button onClick={onClose}>Cancel</Button>

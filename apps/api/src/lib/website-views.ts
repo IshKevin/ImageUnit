@@ -209,8 +209,29 @@ export function createWebsiteViews(ctx: AppContext) {
     return res.items[0]?.id ?? null;
   }
 
-  async function collectionJson(c: typeof collections.$inferSelect, client: ApiClient) {
+  /** Signed link to a collection's own cover files (an uploaded or cropped cover). */
+  const collectionCoverUrl = (client: ApiClient, collectionId: string, size: 'thumbnail' | 'preview') => {
+    const exp = Math.floor(Date.now() / 1000) + MEDIA_URL_TTL;
+    const sig = signMedia(ctx.config.SESSION_SECRET, { photoId: `collection:${collectionId}`, kind: `cover-${size}`, clientId: client.id, exp });
+    return `${ctx.config.API_PUBLIC_URL}/api/v1/collections/${collectionId}/cover/${size}?c=${client.id}&exp=${exp}&sig=${sig}`;
+  };
+
+  /**
+   * Which cover a website gets: the collection's own files (uploaded, or a crop of a cover photo the
+   * website may still see), otherwise a visible photo, otherwise none.
+   */
+  async function collectionCover(client: ApiClient, c: typeof collections.$inferSelect): Promise<{ own: true } | { own: false; photoId: string } | null> {
+    if (!client.scopes.includes('images:read')) return null;
+    if (c.coverOriginalKey && c.coverPreviewKey) return { own: true };
     const coverId = await effectiveCollectionCoverId(client, c);
+    if (!coverId) return null;
+    if (coverId === c.coverPhotoId && c.coverPreviewKey) return { own: true };
+    return { own: false, photoId: coverId };
+  }
+
+  async function collectionJson(c: typeof collections.$inferSelect, client: ApiClient) {
+    const cover = await collectionCover(client, c);
+    const url = (size: 'thumbnail' | 'preview') => (!cover ? null : cover.own ? collectionCoverUrl(client, c.id, size) : mediaUrl(client, cover.photoId, size));
     const mediaCount = (await mediaOf(client, { collectionId: c.id, pageSize: 1 })).total;
     return {
       id: c.id,
@@ -218,7 +239,8 @@ export function createWebsiteViews(ctx: AppContext) {
       name: c.name,
       description: c.description,
       mediaCount,
-      thumbnail: coverId ? mediaUrl(client, coverId, 'thumbnail') : null,
+      thumbnail: url('thumbnail'),
+      cover: cover ? { thumbnail: url('thumbnail')!, preview: url('preview')! } : null,
     };
   }
 
@@ -237,6 +259,16 @@ export function createWebsiteViews(ctx: AppContext) {
   }
 
   async function loadCollection(client: ApiClient, idOrSlug: string) {
+    const c = await loadCollectionRow(client, idOrSlug);
+    const base = await collectionJson(c, client);
+    return {
+      ...base,
+      mediaUrl: `/api/v1/collections/${c.slug}/media`,
+    };
+  }
+
+  /** A published collection assigned to this website, or 404. */
+  async function loadCollectionRow(client: ApiClient, idOrSlug: string) {
     const where = isUuid(idOrSlug) ? eq(collections.id, idOrSlug) : eq(collections.slug, idOrSlug.toLowerCase());
     const [c] = await ctx.db
       .select()
@@ -249,11 +281,7 @@ export function createWebsiteViews(ctx: AppContext) {
         ),
       );
     if (!c) throw notFound('Collection not found');
-    const base = await collectionJson(c, client);
-    return {
-      ...base,
-      mediaUrl: `/api/v1/collections/${c.slug}/media`,
-    };
+    return c;
   }
 
   async function listCollections(client: ApiClient, query: { page?: number; pageSize?: number }) {
@@ -271,6 +299,6 @@ export function createWebsiteViews(ctx: AppContext) {
 
   const photosOf = (client: ApiClient, ev: Event, f: Omit<MediaFilters, 'eventId'> = {}) => mediaOf(client, { ...f, eventId: ev.id });
 
-  return { visibleEvents, loadEvent, mediaUrl, eventJson, eventContext, listEvents, galleriesOf, photosOf, mediaOf, loadCollection, listCollections };
+  return { visibleEvents, loadEvent, mediaUrl, eventJson, eventContext, listEvents, galleriesOf, photosOf, mediaOf, loadCollection, loadCollectionRow, collectionCover, listCollections };
 }
 export type WebsiteViews = ReturnType<typeof createWebsiteViews>;

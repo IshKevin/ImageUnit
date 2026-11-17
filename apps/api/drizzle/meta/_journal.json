@@ -64,6 +64,13 @@
       "when": 1795392000000,
       "tag": "0008_event_cover_crop",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795478400000,
+      "tag": "0009_collection_cover",
+      "breakpoints": true
     }
   ]
 }

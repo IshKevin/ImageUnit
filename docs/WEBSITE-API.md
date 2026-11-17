@@ -60,3 +60,5 @@ curl -H "Authorization: Bearer $IU_KEY" https://api.example.com/api/v1/collectio
 curl -H "Authorization: Bearer $IU_KEY" "https://api.example.com/api/v1/collections/best-of-2026/media?type=image&pageSize=24"
 ```
 Items come in the editor's chosen order, with the same payload as above. Only *published* collections are visible, and a collection only ever shows items the credential could see anyway: media from active, non-password events, not hidden, and within the credential's event allow-list. Without the `images:read` scope the items are returned with `urls: null` (metadata only).
+
+A collection also carries `thumbnail` and `"cover": { "thumbnail": "…", "preview": "…" }` (null without `images:read`): the cover image the editor uploaded or chose for the collection, cropped if they cropped it, otherwise its first visible item. Like media links, these are signed and expire after one hour.

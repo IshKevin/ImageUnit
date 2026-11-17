@@ -1,7 +1,7 @@
-import { and, asc, count, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { events, galleries, photos, users, type Photo } from '../db/schema.js';
+import { collections, events, galleries, photos, users, type Photo } from '../db/schema.js';
 import { isUuid, loadManagedEvent, makeGuards } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
@@ -354,6 +354,10 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
 
   async function permanentlyDelete(req: FastifyRequest, list: Photo[]) {
     for (const p of list) {
+      // Collection crops of this photo go with it (the foreign key only clears coverPhotoId).
+      const croppedIn = and(eq(collections.coverPhotoId, p.id), isNull(collections.coverOriginalKey));
+      const collectionCrops = await ctx.db.select({ coverPreviewKey: collections.coverPreviewKey, coverThumbKey: collections.coverThumbKey }).from(collections).where(croppedIn);
+      if (collectionCrops.length) await ctx.db.update(collections).set({ coverCrop: null, coverPreviewKey: null, coverThumbKey: null }).where(croppedIn);
       // Audit first, atomically with the row removal; object deletion follows.
       await ctx.db.transaction(async (tx) => {
         await audit(tx, actorFromRequest(req), {
@@ -368,7 +372,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
       // A crop made from this photo goes with it; the event falls back to an automatic cover.
       const [cropped] = await ctx.db.select({ preview: events.coverPreviewKey, thumb: events.coverThumbKey }).from(events).where(eq(events.coverPhotoId, p.id));
       if (cropped) await ctx.db.update(events).set({ coverCrop: null, coverPreviewKey: null, coverThumbKey: null }).where(eq(events.coverPhotoId, p.id));
-      await ctx.storage.delete([...photoKeys(p), ...(cropped ? coverCropKeys({ coverPreviewKey: cropped.preview, coverThumbKey: cropped.thumb }) : [])]);
+      await ctx.storage.delete([...photoKeys(p), ...(cropped ? coverCropKeys({ coverPreviewKey: cropped.preview, coverThumbKey: cropped.thumb }) : []), ...collectionCrops.flatMap(coverCropKeys)]);
     }
   }
 

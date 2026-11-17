@@ -161,7 +161,7 @@ export const clientRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = async 
       .select({
         c: collections,
         itemCount: sql<number>`(select count(*) from ${collectionItems} ci where ci.collection_id = ${collections.id})::int`,
-        thumb: sql<string | null>`(select p.thumb_key from ${photos} p where p.id = coalesce(${collections.coverPhotoId}, (select ci.photo_id from ${collectionItems} ci where ci.collection_id = ${collections.id} order by ci.sort_order, ci.added_at limit 1)))`,
+        thumb: sql<string | null>`coalesce(${collections.coverThumbKey}, (select p.thumb_key from ${photos} p where p.id = coalesce(${collections.coverPhotoId}, (select ci.photo_id from ${collectionItems} ci where ci.collection_id = ${collections.id} order by ci.sort_order, ci.added_at limit 1))))`,
       })
       .from(collections)
       .innerJoin(collectionWebsites, eq(collectionWebsites.collectionId, collections.id))
@@ -236,7 +236,8 @@ export const clientRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = async 
         ctx.db.select({ n: sql<number>`count(*)::int` }).from(collectionItems).where(eq(collectionItems.collectionId, existing.id)),
         existing.coverPhotoId ? ctx.db.select({ thumbKey: photos.thumbKey }).from(photos).where(eq(photos.id, existing.coverPhotoId)) : Promise.resolve([]),
       ]);
-      const coverUrl = photo?.thumbKey ? await ctx.storage.presignDownload(photo.thumbKey, { ttlSeconds: 900 }) : null;
+      const thumbKey = existing.coverThumbKey ?? photo?.thumbKey;
+      const coverUrl = thumbKey ? await ctx.storage.presignDownload(thumbKey, { ttlSeconds: 900 }) : null;
 
       reply.code(201);
       return {

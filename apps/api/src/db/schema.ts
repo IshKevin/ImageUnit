@@ -232,6 +232,13 @@ export const collections = pgTable(
     description: text('description').notNull().default(''),
     status: collectionStatus('status').notNull().default('draft'),
     coverPhotoId: uuid('cover_photo_id').references(() => photos.id, { onDelete: 'set null' }),
+    /** A cover image uploaded for this collection alone; takes precedence over coverPhotoId. */
+    coverOriginalKey: text('cover_original_key'),
+    /** Optional crop (fractions of the upright image) of the uploaded cover or of the cover photo. */
+    coverCrop: jsonb('cover_crop').$type<CoverCrop>(),
+    /** Rendered cover files, present while an uploaded or cropped cover is in use. */
+    coverPreviewKey: text('cover_preview_key'),
+    coverThumbKey: text('cover_thumb_key'),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

@@ -6,7 +6,7 @@ import { Check, Crop, ImageIcon, Images, Upload } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button, Card, CardHeader, ErrorNote, Modal, Pagination, Progress, Spinner } from '../ui';
-import { get, patch, post, qs, type EventItem, type Paged, type Photo } from '@/lib/api';
+import { get, patch, post, put, qs, type EventItem, type Paged, type Photo } from '@/lib/api';
 import { useMe } from '@/lib/auth';
 import { CoverCropModal } from './cover-crop-modal';
 
@@ -15,7 +15,7 @@ const MAX_COVER_BYTES = 20 * 1024 * 1024;
 const PICK_PAGE_SIZE = 24;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function putWithProgress(url: string, file: File, onProgress: (p: number) => void): Promise<void> {
+export function putWithProgress(url: string, file: File, onProgress: (p: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url);
@@ -162,7 +162,17 @@ export function CoverCard({ event }: { event: EventItem }) {
         <p className="text-xs text-muted">JPEG, PNG or WebP, up to 20 MB. An uploaded cover is not shown in the gallery.</p>
       </div>
 
-      <CoverCropModal event={event} open={cropping} onClose={() => setCropping(false)} onSaved={refresh} />
+      {event.coverSource && (
+        <CoverCropModal
+          open={cropping}
+          onClose={() => setCropping(false)}
+          sourceUrl={event.coverSource.url}
+          savedCrop={event.coverCrop && event.coverPhotoId === event.coverSource.photoId ? event.coverCrop : null}
+          onSave={(crop) => put(`/events/${event.id}/cover-crop`, { photoId: event.coverSource!.photoId, crop })}
+          onSaved={refresh}
+          usedIn="the public gallery, the event list and connected websites"
+        />
+      )}
 
       <Modal open={picking} onClose={() => setPicking(false)} title="Choose a cover image" wide>
         <ErrorNote error={photos.error} />

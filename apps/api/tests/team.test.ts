@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLogs, events, galleries, notifications, photos } from '../src/db/schema.js';
+import { auditLogs, collections, events, galleries, notifications, photos } from '../src/db/schema.js';
 import { createTestApp, makeEvent, makeUser, readyPhoto, readyVideo, session, testImage, uniq, uploadPhoto, type Session, type TestApp } from './helpers.js';
 
 let t: TestApp;
@@ -313,5 +313,103 @@ describe('event cover', () => {
     expect((await crew.post(`/api/events/${ev.id}/uploads`, { asCover: true, files: [{ filename: 'c.jpg', contentType: 'image/jpeg', sizeBytes: 10 }] })).statusCode).toBe(403);
     expect((await editor.post(`/api/events/${ev.id}/uploads`, { asCover: true, files: [{ filename: 'c.jpg', contentType: 'image/jpeg', sizeBytes: 10 }] })).statusCode).toBe(200);
     expect((await crew.patch(`/api/events/${ev.id}`, { coverPhotoId: null })).statusCode).toBe(403);
+  });
+});
+
+describe('collection cover', () => {
+  async function seed() {
+    const owner = await session(t);
+    const editor = await session(t, 'editor');
+    const admin = await session(t, 'admin');
+    const ev = await makeEvent(owner);
+    const a = await readyPhoto(t, owner, ev.id);
+    const b = await readyPhoto(t, owner, ev.id);
+    await owner.post(`/api/events/${ev.id}/publish`);
+    const site = (await admin.post('/api/admin/websites', { name: `Coll ${uniq()}`, scopes: ['collections:read', 'images:read'] })).json();
+    const c = (await editor.post('/api/collections', { name: `Cover ${uniq()}`, websiteIds: [site.website.id] })).json().collection;
+    await editor.post(`/api/collections/${c.id}/items`, { selection: { ids: [a, b] } });
+    await editor.patch(`/api/collections/${c.id}`, { status: 'published' });
+    const v1 = async (path: string) => t.app.inject({ method: 'GET', url: `/api/v1${path}`, headers: { authorization: `Bearer ${site.apiKey}` } });
+    const follow = async (url: string) => { const u = new URL(url); return t.app.inject({ method: 'GET', url: u.pathname + u.search }); };
+    const row = async () => (await t.ctx.db.select().from(collections).where(eq(collections.id, c.id)))[0]!;
+    return { editor, owner, a, b, c, v1, follow, row };
+  }
+  const sharpSize = async (buf: Buffer) => { const m = await (await import('sharp')).default(buf).metadata(); return [m.width, m.height]; };
+
+  it('crops a chosen item; the dashboard and websites get the cropped cover; choosing another drops it', async () => {
+    const { editor, a, b, c, v1, follow, row } = await seed();
+    const res = await editor.put(`/api/collections/${c.id}/cover-crop`, { photoId: b, crop: { x: 0, y: 0, width: 0.5, height: 0.5 } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().collection).toMatchObject({ coverPhotoId: b, coverCrop: { x: 0, y: 0, width: 0.5, height: 0.5 }, coverUploaded: false });
+    expect(res.json().collection).not.toHaveProperty('coverPreviewKey');
+    const r = await row();
+    expect(await sharpSize(t.storage.objects.get(r.coverPreviewKey!)!.body)).toEqual([400, 300]);
+    expect((await editor.get(`/api/collections/${c.id}`)).json().collection.coverUrl).toContain(r.coverPreviewKey!);
+    expect((await editor.get('/api/collections')).json().items.find((x: { id: string }) => x.id === c.id).coverUrl).toContain(r.coverThumbKey!);
+
+    const ext = (await v1(`/collections/${c.slug}`)).json().collection;
+    expect(ext.thumbnail).toBe(ext.cover.thumbnail);
+    expect((await follow(ext.cover.preview)).headers.location).toContain(r.coverPreviewKey!);
+    expect((await follow(ext.cover.thumbnail)).headers.location).toContain(r.coverThumbKey!);
+    // Signed links cannot be retargeted to another collection or size.
+    expect((await follow(ext.cover.preview.replace('/cover/preview', '/cover/thumbnail'))).statusCode).toBe(403);
+
+    // A photo outside the collection cannot be cropped into its cover.
+    const stranger = await session(t);
+    const outsider = await readyPhoto(t, stranger, (await makeEvent(stranger)).id);
+    expect((await editor.put(`/api/collections/${c.id}/cover-crop`, { photoId: outsider, crop: null })).statusCode).toBe(400);
+
+    expect((await editor.patch(`/api/collections/${c.id}`, { coverPhotoId: a })).statusCode).toBe(200);
+    expect((await row()).coverCrop).toBeNull();
+    expect(t.storage.objects.has(r.coverPreviewKey!)).toBe(false);
+    const plain = (await v1(`/collections/${c.slug}`)).json().collection;
+    expect(plain.cover.preview).toContain(`/api/v1/media/${a}/preview`);
+  });
+
+  it('uploads a cover image of its own, crops it, and falls back to automatic when asked', async () => {
+    const { editor, c, v1, follow, row } = await seed();
+    const data = await testImage(1200, 800);
+    const init = await editor.post(`/api/collections/${c.id}/cover-upload`, { contentType: 'image/jpeg', sizeBytes: data.length });
+    expect(init.statusCode).toBe(200);
+    const { key, uploadUrl } = init.json();
+    expect(uploadUrl).toContain(key);
+    t.storage.objects.set(key, { body: data, contentType: 'image/jpeg' });
+    const done = await editor.post(`/api/collections/${c.id}/cover-upload/complete`, { key });
+    expect(done.statusCode).toBe(200);
+    expect(done.json().collection).toMatchObject({ coverUploaded: true, coverPhotoId: null, coverCrop: null });
+    expect(done.json().collection.coverSource).toMatchObject({ kind: 'upload', croppable: true });
+    const first = await row();
+    expect(await sharpSize(t.storage.objects.get(first.coverPreviewKey!)!.body)).toEqual([1200, 800]);
+    const ext = (await v1(`/collections/${c.slug}`)).json().collection;
+    expect((await follow(ext.cover.preview)).headers.location).toContain(first.coverPreviewKey!);
+
+    // Crop the uploaded image (no photoId); the old rendition is removed, the original kept.
+    expect((await editor.put(`/api/collections/${c.id}/cover-crop`, { crop: { x: 0.25, y: 0, width: 0.5, height: 1 } })).statusCode).toBe(200);
+    const cropped = await row();
+    expect(await sharpSize(t.storage.objects.get(cropped.coverPreviewKey!)!.body)).toEqual([600, 800]);
+    expect(t.storage.objects.has(first.coverPreviewKey!)).toBe(false);
+    expect(t.storage.objects.has(key)).toBe(true);
+
+    // Not an image, or someone else's key: refused.
+    const bad = (await editor.post(`/api/collections/${c.id}/cover-upload`, { contentType: 'image/png', sizeBytes: 10 })).json();
+    t.storage.objects.set(bad.key, { body: Buffer.from('not an image'), contentType: 'image/png' });
+    expect((await editor.post(`/api/collections/${c.id}/cover-upload/complete`, { key: bad.key })).statusCode).toBe(400);
+    expect(t.storage.objects.has(bad.key)).toBe(false);
+    expect((await editor.post(`/api/collections/${c.id}/cover-upload/complete`, { key: 'events/x/originals/y.jpg' })).statusCode).toBe(400);
+    expect((await editor.post(`/api/collections/${c.id}/cover-upload`, { contentType: 'image/jpeg', sizeBytes: 30 * 1024 * 1024 })).statusCode).toBe(400);
+
+    // Automatic again: every uploaded file goes.
+    expect((await editor.patch(`/api/collections/${c.id}`, { coverPhotoId: null })).statusCode).toBe(200);
+    const after = await row();
+    expect([after.coverOriginalKey, after.coverPreviewKey, after.coverCrop]).toEqual([null, null, null]);
+    expect(t.storage.objects.has(key)).toBe(false);
+    expect(t.storage.objects.has(cropped.coverPreviewKey!)).toBe(false);
+  });
+
+  it('photographers cannot change collection covers', async () => {
+    const { c, a } = await seed();
+    const photographer = await session(t);
+    expect((await photographer.put(`/api/collections/${c.id}/cover-crop`, { photoId: a, crop: null })).statusCode).toBe(403);
+    expect((await photographer.post(`/api/collections/${c.id}/cover-upload`, { contentType: 'image/jpeg', sizeBytes: 10 })).statusCode).toBe(403);
   });
 });

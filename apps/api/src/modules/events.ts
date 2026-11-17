@@ -8,7 +8,7 @@ import { loadManagedEvent, makeGuards } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
 import { hashPassword } from '../lib/crypto.js';
-import { coverCropKeys, croppedCoverKey, renderCoverCrop } from '../lib/cover.js';
+import { coverCropKeys, croppedCoverKey, cropSchema, renderCover } from '../lib/cover.js';
 import { badRequest, conflict, forbidden } from '../lib/errors.js';
 import { assertTransition } from '../lib/lifecycle.js';
 import { photoKeys } from '../lib/media.js';
@@ -208,24 +208,14 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
    * change underneath it. A null crop restores the full photo.
    */
   app.put('/events/:id/cover-crop', { preHandler: guard.perm('events:edit') }, async (req) => {
-    const unit = z.number().min(0).max(1);
-    const body = parse(
-      z.object({
-        photoId: z.string().uuid(),
-        crop: z
-          .object({ x: unit, y: unit, width: unit.gt(0), height: unit.gt(0) })
-          .refine((c) => c.x + c.width <= 1.0001 && c.y + c.height <= 1.0001, 'The crop must lie inside the image')
-          .nullable(),
-      }),
-      req.body,
-    );
+    const body = parse(z.object({ photoId: z.string().uuid(), crop: cropSchema.nullable() }), req.body);
     const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id);
     if (['archived', 'scheduled_for_deletion'].includes(ev.status) && req.user!.role !== 'admin') throw forbidden('Archived events are read-only');
     const [photo] = await ctx.db.select().from(photos).where(and(eq(photos.id, body.photoId), eq(photos.eventId, ev.id), eq(photos.status, 'ready')));
     if (!photo) throw badRequest('Cover photo must be a ready photo of this event');
     if (photo.mediaType !== 'image') throw badRequest('Only photographs can be cropped');
 
-    const keys = body.crop ? await renderCoverCrop(ctx, photo, body.crop) : null;
+    const keys = body.crop ? await renderCover(ctx, photo.originalKey, body.crop, `events/${ev.id}/cover/${photo.id}`) : null;
     const patch: Partial<Event> = {
       coverPhotoId: photo.id,
       coverCrop: body.crop,

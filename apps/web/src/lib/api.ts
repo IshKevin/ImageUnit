@@ -186,6 +186,12 @@ export interface Collection {
   description: string;
   status: 'draft' | 'published';
   coverPhotoId: string | null;
+  /** Crop applied to the uploaded cover or to the cover photo; null shows the whole picture. */
+  coverCrop?: CoverCrop | null;
+  /** True when the cover is an image uploaded for this collection rather than one of its items. */
+  coverUploaded?: boolean;
+  /** The uncropped picture behind the cover (single-collection responses only), for the crop editor. */
+  coverSource?: { kind: 'upload' | 'photo'; photoId: string | null; url: string; croppable: boolean } | null;
   websiteId?: string | null;
   websiteIds?: string[];
   thumbnail?: string | null;

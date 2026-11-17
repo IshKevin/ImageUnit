@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { and, asc, count, desc, eq, ilike, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
@@ -6,6 +7,7 @@ import type { Tx } from '../db/client.js';
 import { isUuid, makeGuards } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
+import { assertCoverUpload, COVER_UPLOAD_TYPES, coverCropKeys, cropSchema, MAX_COVER_UPLOAD_BYTES, renderCover } from '../lib/cover.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { filterSchema, libraryConds, resolveSelection, selectionSchema, sortSchema } from '../lib/library.js';
 import { createItemView } from '../lib/library-view.js';
@@ -22,8 +24,12 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
   const itemView = createItemView(ctx);
 
   const dto = (c: Collection, extra: Record<string, unknown> = {}) => ({
-    id: c.id, slug: c.slug, name: c.name, description: c.description, status: c.status, coverPhotoId: c.coverPhotoId, createdAt: c.createdAt, updatedAt: c.updatedAt, ...extra,
+    id: c.id, slug: c.slug, name: c.name, description: c.description, status: c.status, coverPhotoId: c.coverPhotoId,
+    coverCrop: c.coverCrop, coverUploaded: !!c.coverOriginalKey, createdAt: c.createdAt, updatedAt: c.updatedAt, ...extra,
   });
+  /** Every stored file that belongs to the collection's cover (uploaded original and renditions). */
+  const coverFiles = (c: Collection) => [...coverCropKeys(c), ...(c.coverOriginalKey ? [c.coverOriginalKey] : [])];
+  const noCover = { coverOriginalKey: null, coverCrop: null, coverPreviewKey: null, coverThumbKey: null } as const;
 
   async function load(id: string) {
     if (!isUuid(id)) throw notFound('Collection not found');
@@ -32,22 +38,50 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
     return c;
   }
 
-  async function coverUrl(collectionId: string, coverPhotoId: string | null, size: 'thumb' | 'preview' = 'preview') {
-    const keyCol = size === 'thumb' ? photos.thumbKey : photos.previewKey;
-    let key: string | null | undefined;
-    if (coverPhotoId) {
-      key = (await ctx.db.select({ key: keyCol }).from(photos).where(and(eq(photos.id, coverPhotoId), eq(photos.status, 'ready'))))[0]?.key;
+  /**
+   * Cover precedence: an uploaded cover, then the chosen photo (cropped when a crop is set), then the
+   * first item. coverUrl is what everyone sees; coverSource is the uncropped picture for the crop editor.
+   */
+  async function coverInfo(c: Collection) {
+    const sign = (key: string) => ctx.storage.presignDownload(key, { ttlSeconds: 900 });
+    if (c.coverOriginalKey && c.coverPreviewKey) {
+      return { coverUrl: await sign(c.coverPreviewKey), coverSource: { kind: 'upload' as const, photoId: null, url: await sign(c.coverOriginalKey), croppable: true } };
     }
-    if (!key) {
-      key = (await ctx.db
-        .select({ key: keyCol })
+    const cols = { id: photos.id, previewKey: photos.previewKey, mediaType: photos.mediaType };
+    let src = c.coverPhotoId ? (await ctx.db.select(cols).from(photos).where(and(eq(photos.id, c.coverPhotoId), eq(photos.status, 'ready'))))[0] : undefined;
+    if (!src?.previewKey) {
+      src = (await ctx.db
+        .select(cols)
         .from(photos)
         .innerJoin(collectionItems, eq(collectionItems.photoId, photos.id))
-        .where(and(eq(collectionItems.collectionId, collectionId), eq(photos.status, 'ready'), eq(photos.isHidden, false)))
+        .where(and(eq(collectionItems.collectionId, c.id), eq(photos.status, 'ready'), eq(photos.isHidden, false)))
         .orderBy(asc(collectionItems.sortOrder), asc(collectionItems.addedAt))
-        .limit(1))[0]?.key;
+        .limit(1))[0];
     }
-    return key ? ctx.storage.presignDownload(key, { ttlSeconds: 900 }) : null;
+    if (!src?.previewKey) return { coverUrl: null, coverSource: null };
+    const sourceUrl = await sign(src.previewKey);
+    const cropped = src.id === c.coverPhotoId ? c.coverPreviewKey : null;
+    return {
+      coverUrl: cropped ? await sign(cropped) : sourceUrl,
+      coverSource: { kind: 'photo' as const, photoId: src.id, url: sourceUrl, croppable: src.mediaType === 'image' },
+    };
+  }
+
+  /** Applies a new cover state, audits it, and removes the files the old state no longer uses. */
+  async function saveCover(req: Parameters<typeof actorFromRequest>[0], c: Collection, patch: Partial<Collection>) {
+    const updated = await ctx.db.transaction(async (tx) => {
+      const [row] = await tx.update(collections).set(patch).where(eq(collections.id, c.id)).returning();
+      await audit(tx, actorFromRequest(req), {
+        action: 'collection.updated', entityType: 'collection', entityId: c.id,
+        before: { coverPhotoId: c.coverPhotoId, coverCrop: c.coverCrop, coverUploaded: !!c.coverOriginalKey },
+        after: { coverPhotoId: row!.coverPhotoId, coverCrop: row!.coverCrop, coverUploaded: !!row!.coverOriginalKey },
+      });
+      return row!;
+    });
+    const keep = new Set(coverFiles(updated));
+    const stale = coverFiles(c).filter((k) => !keep.has(k));
+    await ctx.storage.delete(stale).catch((err) => ctx.log.warn({ err }, 'collection cover cleanup failed'));
+    return updated;
   }
 
   async function uniqueSlug(name: string) {
@@ -85,7 +119,7 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
       .select({
         c: collections,
         n: sql<number>`(select count(*) from ${collectionItems} ci where ci.collection_id = ${collections.id})::int`,
-        thumb: sql<string | null>`(select p.thumb_key from ${photos} p where p.id = coalesce(${collections.coverPhotoId}, (select ci.photo_id from ${collectionItems} ci where ci.collection_id = ${collections.id} order by ci.sort_order, ci.added_at limit 1)))`,
+        thumb: sql<string | null>`coalesce(${collections.coverThumbKey}, (select p.thumb_key from ${photos} p where p.id = coalesce(${collections.coverPhotoId}, (select ci.photo_id from ${collectionItems} ci where ci.collection_id = ${collections.id} order by ci.sort_order, ci.added_at limit 1))))`,
       })
       .from(collections)
       .where(where)
@@ -130,10 +164,10 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/collections/:id', { preHandler }, async (req) => {
     const c = await load((req.params as { id: string }).id);
-    const [[{ n } = { n: 0 }], websites, previewCoverUrl] = await Promise.all([
+    const [[{ n } = { n: 0 }], websites, cover] = await Promise.all([
       ctx.db.select({ n: count() }).from(collectionItems).where(eq(collectionItems.collectionId, c.id)),
       ctx.db.select({ clientId: collectionWebsites.clientId }).from(collectionWebsites).where(eq(collectionWebsites.collectionId, c.id)),
-      coverUrl(c.id, c.coverPhotoId, 'preview'),
+      coverInfo(c),
     ]);
     const websiteIdList = websites.map(({ clientId }) => clientId);
     return {
@@ -141,7 +175,7 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
         itemCount: n,
         websiteId: websiteIdList[0] ?? null,
         websiteIds: websiteIdList,
-        coverUrl: previewCoverUrl,
+        ...cover,
         apiUrl: `${ctx.config.API_PUBLIC_URL}/api/v1/collections/${c.slug}`,
       }),
     };
@@ -174,12 +208,15 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
     const finalWebsiteIds = body.websiteId !== undefined
       ? (body.websiteId ? [body.websiteId] : [])
       : body.websiteIds;
+    const dropsCover = body.coverPhotoId !== undefined && (body.coverPhotoId !== c.coverPhotoId || !!c.coverOriginalKey) && coverFiles(c).length > 0;
 
     const updated = await ctx.db.transaction(async (tx) => {
       if (finalWebsiteIds !== undefined) {
         await validateWebsites(tx, finalWebsiteIds);
       }
-      const { websiteId, websiteIds, ...collectionUpdates } = body;
+      const { websiteId, websiteIds, ...rest } = body;
+      // Choosing a cover photo (or automatic) replaces an uploaded cover and any crop.
+      const collectionUpdates: Partial<Collection> = { ...rest, ...(dropsCover && noCover) };
       const [row] = Object.keys(collectionUpdates).length > 0
         ? await tx.update(collections).set(collectionUpdates).where(eq(collections.id, c.id)).returning()
         : [c];
@@ -202,9 +239,10 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
       });
       return row!;
     });
-    const [websites, previewCoverUrl, [{ n } = { n: 0 }]] = await Promise.all([
+    if (dropsCover) await ctx.storage.delete(coverFiles(c)).catch((err) => req.log.warn({ err }, 'collection cover cleanup failed'));
+    const [websites, cover, [{ n } = { n: 0 }]] = await Promise.all([
       ctx.db.select({ clientId: collectionWebsites.clientId }).from(collectionWebsites).where(eq(collectionWebsites.collectionId, c.id)),
-      coverUrl(updated.id, updated.coverPhotoId, 'preview'),
+      coverInfo(updated),
       ctx.db.select({ n: count() }).from(collectionItems).where(eq(collectionItems.collectionId, c.id)),
     ]);
     const websiteIdList = websites.map(({ clientId }) => clientId);
@@ -213,9 +251,61 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
         itemCount: n,
         websiteId: websiteIdList[0] ?? null,
         websiteIds: websiteIdList,
-        coverUrl: previewCoverUrl,
+        ...cover,
       }),
     };
+  });
+
+  // ---------- cover: upload your own image, crop ----------
+
+  /** Step 1 of uploading a cover image: a short-lived URL to send the file to. */
+  app.post('/collections/:id/cover-upload', { preHandler }, async (req) => {
+    const body = parse(z.object({ contentType: z.enum(COVER_UPLOAD_TYPES), sizeBytes: z.number().int().positive().max(MAX_COVER_UPLOAD_BYTES, 'The cover image must be 20 MB or smaller') }), req.body);
+    const c = await load((req.params as { id: string }).id);
+    const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[body.contentType];
+    const key = `collections/${c.id}/cover/upload-${randomBytes(8).toString('hex')}.${ext}`;
+    return { key, uploadUrl: await ctx.storage.presignUpload(key, body.contentType, 900) };
+  });
+
+  /** Step 2: checks the uploaded file and makes it the cover, replacing any chosen photo or crop. */
+  app.post('/collections/:id/cover-upload/complete', { preHandler }, async (req) => {
+    const { key } = parse(z.object({ key: z.string().max(300) }), req.body);
+    const c = await load((req.params as { id: string }).id);
+    if (!/^collections\/[0-9a-f-]{36}\/cover\/upload-[0-9a-f]{16}\.(jpg|png|webp)$/.test(key) || !key.startsWith(`collections/${c.id}/`)) throw badRequest('Unknown upload');
+    try {
+      await assertCoverUpload(ctx, key);
+    } catch (err) {
+      await ctx.storage.delete([key]).catch(() => undefined);
+      throw err;
+    }
+    const files = await renderCover(ctx, key, null, `collections/${c.id}/cover`);
+    const updated = await saveCover(req, c, { coverPhotoId: null, coverOriginalKey: key, coverCrop: null, coverPreviewKey: files.previewKey, coverThumbKey: files.thumbKey });
+    return { collection: dto(updated, await coverInfo(updated)) };
+  });
+
+  /**
+   * Crops the cover. With photoId, crops that photo and makes it the cover; without, crops the uploaded
+   * cover image. A null crop shows the whole picture again.
+   */
+  app.put('/collections/:id/cover-crop', { preHandler }, async (req) => {
+    const body = parse(z.object({ photoId: z.string().uuid().optional(), crop: cropSchema.nullable() }), req.body);
+    const c = await load((req.params as { id: string }).id);
+    const prefix = `collections/${c.id}/cover`;
+    let patch: Partial<Collection>;
+    if (body.photoId) {
+      const [photo] = await ctx.db.select().from(photos).where(and(eq(photos.id, body.photoId), eq(photos.status, 'ready')));
+      const [member] = await ctx.db.select({ id: collectionItems.photoId }).from(collectionItems).where(and(eq(collectionItems.collectionId, c.id), eq(collectionItems.photoId, body.photoId)));
+      if (!photo || (!member && photo.id !== c.coverPhotoId)) throw badRequest('The cover must be a ready item of this collection');
+      if (photo.mediaType !== 'image') throw badRequest('Only photographs can be cropped');
+      const files = body.crop ? await renderCover(ctx, photo.originalKey, body.crop, prefix) : null;
+      patch = { ...noCover, coverPhotoId: photo.id, coverCrop: body.crop, coverPreviewKey: files?.previewKey ?? null, coverThumbKey: files?.thumbKey ?? null };
+    } else {
+      if (!c.coverOriginalKey) throw badRequest('Choose a cover photo or upload a cover image first');
+      const files = await renderCover(ctx, c.coverOriginalKey, body.crop, prefix);
+      patch = { coverCrop: body.crop, coverPreviewKey: files.previewKey, coverThumbKey: files.thumbKey };
+    }
+    const updated = await saveCover(req, c, patch);
+    return { collection: dto(updated, await coverInfo(updated)) };
   });
 
   app.delete('/collections/:id', { preHandler }, async (req, reply) => {
@@ -224,6 +314,7 @@ export const collectionRoutes: FastifyPluginAsync = async (app) => {
       await tx.delete(collections).where(eq(collections.id, c.id));
       await audit(tx, actorFromRequest(req), { action: 'collection.deleted', entityType: 'collection', entityId: c.id, before: dto(c) });
     });
+    await ctx.storage.delete(coverFiles(c)).catch((err) => req.log.warn({ err }, 'collection cover cleanup failed'));
     reply.code(204);
   });
 
