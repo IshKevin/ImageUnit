@@ -14,7 +14,7 @@ import { bytes, date, label, num } from '@/lib/format';
 
 function NewEventModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const router = useRouter();
-  const [form, setForm] = useState({ name: '', description: '', eventDate: '', location: '', visibility: 'public', downloadPolicy: 'preview' as DownloadPolicy, password: '' });
+  const [form, setForm] = useState({ name: '', description: '', eventDate: '', location: '', visibility: 'public', downloadPolicy: 'full' as DownloadPolicy, password: '' });
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
   const create = useMutation({
     mutationFn: () => post<{ event: EventItem }>('/events', { name: form.name, description: form.description, eventDate: form.eventDate || null, location: form.location || null, visibility: form.visibility, downloadPolicy: form.downloadPolicy, password: form.visibility === 'private' ? form.password : undefined }),

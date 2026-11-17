@@ -1,10 +1,11 @@
 import { and, asc, count, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { galleries, photos, users, type Photo } from '../db/schema.js';
+import { events, galleries, photos, users, type Photo } from '../db/schema.js';
 import { isUuid, loadManagedEvent, makeGuards } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
+import { coverCropKeys } from '../lib/cover.js';
 import { AppError, badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
 import { enqueuePhoto } from '../lib/jobs.js';
 import { publicStorageProblem } from '../lib/storage-config.js';
@@ -364,7 +365,10 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
         });
         await tx.delete(photos).where(eq(photos.id, p.id));
       });
-      await ctx.storage.delete(photoKeys(p));
+      // A crop made from this photo goes with it; the event falls back to an automatic cover.
+      const [cropped] = await ctx.db.select({ preview: events.coverPreviewKey, thumb: events.coverThumbKey }).from(events).where(eq(events.coverPhotoId, p.id));
+      if (cropped) await ctx.db.update(events).set({ coverCrop: null, coverPreviewKey: null, coverThumbKey: null }).where(eq(events.coverPhotoId, p.id));
+      await ctx.storage.delete([...photoKeys(p), ...(cropped ? coverCropKeys({ coverPreviewKey: cropped.preview, coverThumbKey: cropped.thumb }) : [])]);
     }
   }
 

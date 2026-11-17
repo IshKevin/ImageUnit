@@ -2,12 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Check, ImageIcon, Images, Upload } from 'lucide-react';
+import { Check, Crop, ImageIcon, Images, Upload } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button, Card, CardHeader, ErrorNote, Modal, Pagination, Progress, Spinner } from '../ui';
 import { get, patch, post, qs, type EventItem, type Paged, type Photo } from '@/lib/api';
 import { useMe } from '@/lib/auth';
+import { CoverCropModal } from './cover-crop-modal';
 
 const COVER_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_COVER_BYTES = 20 * 1024 * 1024;
@@ -35,6 +36,7 @@ export function CoverCard({ event }: { event: EventItem }) {
   const archived = ['archived', 'scheduled_for_deletion'].includes(event.status);
   const fileInput = useRef<HTMLInputElement>(null);
   const [picking, setPicking] = useState(false);
+  const [cropping, setCropping] = useState(false);
   const [page, setPage] = useState(1);
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -104,8 +106,9 @@ export function CoverCard({ event }: { event: EventItem }) {
       <CardHeader title="Cover image" />
       <div className="space-y-4 p-5">
         {event.coverUrl ? (
+          // A cropped cover is shown at its own shape; otherwise the banner's 16:9 framing.
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={event.coverUrl} alt={`Current cover image of ${event.name}`} className="aspect-[16/9] w-full rounded-lg bg-surface-2 object-cover" />
+          <img src={event.coverUrl} alt={`Current cover image of ${event.name}`} className={event.coverCrop ? 'max-h-80 w-full rounded-lg bg-surface-2 object-contain' : 'aspect-[16/9] w-full rounded-lg bg-surface-2 object-cover'} />
         ) : (
           <div className="grid aspect-[16/9] w-full place-items-center rounded-lg border border-dashed border-border bg-surface-2 p-4 text-center text-sm text-muted">
             <span className="flex flex-col items-center gap-2"><ImageIcon className="size-6" aria-hidden /> Automatic: the first photograph is used</span>
@@ -134,6 +137,11 @@ export function CoverCard({ event }: { event: EventItem }) {
           <Button disabled={busy || setCover.isPending} onClick={() => fileInput.current?.click()}>
             <Upload className="size-4" /> Upload a cover image
           </Button>
+          {event.coverSource?.croppable && (
+            <Button disabled={busy || setCover.isPending} onClick={() => setCropping(true)}>
+              <Crop className="size-4" /> {event.coverCrop ? 'Edit crop' : 'Crop / reposition'}
+            </Button>
+          )}
           {event.coverPhotoId && (
             <Button variant="ghost" disabled={busy} loading={setCover.isPending && setCover.variables === null} onClick={() => setCover.mutate(null)}>
               Use automatic cover
@@ -153,6 +161,8 @@ export function CoverCard({ event }: { event: EventItem }) {
         </div>
         <p className="text-xs text-muted">JPEG, PNG or WebP, up to 20 MB. An uploaded cover is not shown in the gallery.</p>
       </div>
+
+      <CoverCropModal event={event} open={cropping} onClose={() => setCropping(false)} onSaved={refresh} />
 
       <Modal open={picking} onClose={() => setPicking(false)} title="Choose a cover image" wide>
         <ErrorNote error={photos.error} />

@@ -64,7 +64,7 @@ export async function session(t: TestApp, role: 'admin' | 'editor' | 'photograph
   const user = await makeUser(t, role, extra);
   const { cookie } = await login(t, user.email);
   const call = (method: string, url: string, payload?: unknown) => t.app.inject({ method: method as never, url, payload: payload as never, headers: { cookie } });
-  return { user, cookie, call, get: (u: string) => call('GET', u), post: (u: string, p?: unknown) => call('POST', u, p ?? {}), patch: (u: string, p: unknown) => call('PATCH', u, p), del: (u: string) => call('DELETE', u) };
+  return { user, cookie, call, get: (u: string) => call('GET', u), post: (u: string, p?: unknown) => call('POST', u, p ?? {}), patch: (u: string, p: unknown) => call('PATCH', u, p), put: (u: string, p: unknown) => call('PUT', u, p), del: (u: string) => call('DELETE', u) };
 }
 export type Session = Awaited<ReturnType<typeof session>>;
 

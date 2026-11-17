@@ -240,6 +240,74 @@ describe('event cover', () => {
     void events;
   });
 
+  it('a crop renders a cropped cover for the gallery and websites, and is dropped when the cover changes', async () => {
+    const { owner, ev, a, b, v1 } = await published();
+    const sharp = (await import('sharp')).default;
+    const row = async () => (await t.ctx.db.select().from(events).where(eq(events.id, ev.id)))[0]!;
+
+    const res = await owner.put(`/api/events/${ev.id}/cover-crop`, { photoId: b, crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.5 } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().event.coverPhotoId).toBe(b); // cropping pins the photo as the cover
+    expect(res.json().event.coverCrop).toEqual({ x: 0.1, y: 0.2, width: 0.5, height: 0.5 });
+    expect(res.json().event).not.toHaveProperty('coverPreviewKey'); // storage keys stay internal
+    expect(res.json().event.coverSource.photoId).toBe(b);
+    const { coverPreviewKey, coverThumbKey } = await row();
+    const meta = await sharp(t.storage.objects.get(coverPreviewKey!)!.body as Buffer).metadata();
+    expect([meta.width, meta.height]).toEqual([400, 300]); // half of the 800×600 original
+
+    // Gallery banner, console and website all receive the cropped image; the photo itself is unchanged.
+    expect((await t.app.inject({ method: 'GET', url: `/api/public/events/${ev.slug}/cover` })).headers.location).toContain(coverPreviewKey!);
+    expect((await owner.get(`/api/events/${ev.id}`)).json().event.coverUrl).toContain(coverPreviewKey!);
+    const ext = (await v1(`/events/${ev.id}`)).json().event;
+    for (const [url, key] of [[ext.cover.preview, coverPreviewKey], [ext.cover.thumbnail, coverThumbKey]] as const) {
+      const link = new URL(url);
+      const hit = await t.app.inject({ method: 'GET', url: link.pathname + link.search });
+      expect(hit.statusCode).toBe(302);
+      expect(hit.headers.location).toContain(key!);
+    }
+    const plain = (await t.app.inject({ method: 'GET', url: `/api/public/photos/${b}/preview` })).headers.location as string;
+    expect(plain).not.toContain(coverPreviewKey!);
+
+    // Invalid crops are refused.
+    expect((await owner.put(`/api/events/${ev.id}/cover-crop`, { photoId: b, crop: { x: 0.8, y: 0, width: 0.5, height: 0.5 } })).statusCode).toBe(400);
+    expect((await owner.put(`/api/events/${ev.id}/cover-crop`, { photoId: b, crop: { x: 0, y: 0, width: 0.01, height: 0.01 } })).statusCode).toBe(400);
+
+    // Choosing another cover drops the crop and its files.
+    expect((await owner.patch(`/api/events/${ev.id}`, { coverPhotoId: a })).statusCode).toBe(200);
+    expect((await row()).coverCrop).toBeNull();
+    expect(t.storage.objects.has(coverPreviewKey!)).toBe(false);
+    expect(t.storage.objects.has(coverThumbKey!)).toBe(false);
+
+    // A null crop restores the full photo.
+    await owner.put(`/api/events/${ev.id}/cover-crop`, { photoId: a, crop: { x: 0, y: 0, width: 0.5, height: 1 } });
+    const keyA = (await row()).coverPreviewKey!;
+    expect((await owner.put(`/api/events/${ev.id}/cover-crop`, { photoId: a, crop: null })).statusCode).toBe(200);
+    expect((await row()).coverPreviewKey).toBeNull();
+    expect(t.storage.objects.has(keyA)).toBe(false);
+  });
+
+  it('crops are measured on the upright image (EXIF orientation applied)', async () => {
+    const owner = await session(t);
+    const ev = await makeEvent(owner);
+    expect((await owner.get(`/api/events/${ev.id}`)).json().event.downloadPolicy).toBe('full'); // new events download at full resolution
+    const sharp = (await import('sharp')).default;
+    // Stored landscape 800×600 with "rotate 90°": it displays as portrait 600×800.
+    const data = await sharp({ create: { width: 800, height: 600, channels: 3, background: { r: 10, g: 120, b: 200 } } }).jpeg().withMetadata({ orientation: 6 }).toBuffer();
+    const { photoId } = await uploadPhoto(t, owner, ev.id, { data });
+    const { processMedia } = await import('../src/jobs/process-photo.js');
+    await processMedia(t.ctx, photoId);
+    expect((await owner.put(`/api/events/${ev.id}/cover-crop`, { photoId, crop: { x: 0, y: 0, width: 1, height: 0.5 } })).statusCode).toBe(200);
+    const [row] = await t.ctx.db.select().from(events).where(eq(events.id, ev.id));
+    const meta = await sharp(t.storage.objects.get(row!.coverPreviewKey!)!.body as Buffer).metadata();
+    expect([meta.width, meta.height]).toEqual([600, 400]);
+  });
+
+  it('only people who manage the event can crop its cover', async () => {
+    const { crew, ev } = await setup();
+    const photoId = await readyPhoto(t, crew, ev.id);
+    expect((await crew.put(`/api/events/${ev.id}/cover-crop`, { photoId, crop: { x: 0, y: 0, width: 0.5, height: 0.5 } })).statusCode).toBe(403);
+  });
+
   it('only owners and editors can upload a cover-only image', async () => {
     const { editor, crew, ev } = await setup();
     expect((await crew.post(`/api/events/${ev.id}/uploads`, { asCover: true, files: [{ filename: 'c.jpg', contentType: 'image/jpeg', sizeBytes: 10 }] })).statusCode).toBe(403);

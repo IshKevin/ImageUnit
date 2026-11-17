@@ -2,10 +2,11 @@ import { and, asc, count, eq, sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { q } from '../lib/sql.js';
-import { galleries, photos } from '../db/schema.js';
+import { galleries, photos, type Event } from '../db/schema.js';
 import { pageParams, parse } from '../http/validate.js';
 import { effectiveDownloadPolicy } from '../lib/access.js';
 import { hashPassword, verifyPassword } from '../lib/crypto.js';
+import { croppedCoverKey } from '../lib/cover.js';
 import { AppError, forbidden, unauthorized } from '../lib/errors.js';
 import { downloadName } from '../lib/media.js';
 import { textSearch } from '../lib/media-query.js';
@@ -18,10 +19,12 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
   const ctx = app.ctx;
   const mediaPath = (photoId: string, kind: string) => `/api/public/photos/${photoId}/${kind}`;
 
-  async function findCover(eventId: string, coverPhotoId: string | null) {
-    if (coverPhotoId) {
-      const [chosen] = await ctx.db.select({ id: photos.id, key: photos.previewKey }).from(photos).where(and(eq(photos.id, coverPhotoId), eq(photos.eventId, eventId), eq(photos.status, 'ready')));
-      if (chosen?.key) return chosen;
+  async function findCover(ev: Pick<Event, 'id' | 'coverPhotoId' | 'coverPreviewKey' | 'coverThumbKey'>) {
+    const eventId = ev.id;
+    if (ev.coverPhotoId) {
+      const [chosen] = await ctx.db.select({ id: photos.id, key: photos.previewKey }).from(photos).where(and(eq(photos.id, ev.coverPhotoId), eq(photos.eventId, eventId), eq(photos.status, 'ready')));
+      // A cropped cover is served in place of the photo's own preview.
+      if (chosen?.key) return { id: chosen.id, key: croppedCoverKey(ev, chosen.id, 'preview') ?? chosen.key };
     }
     const [first] = await ctx.db
       .select({ id: photos.id, key: photos.previewKey })
@@ -35,7 +38,7 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
   /** The event's cover image: redirects to a short-lived link, after the same access checks as the gallery. */
   app.get('/public/events/:slug/cover', async (req, reply) => {
     const ev = await resolvePublicEvent(ctx, req, (req.params as { slug: string }).slug);
-    const cover = await findCover(ev.id, ev.coverPhotoId);
+    const cover = await findCover(ev);
     if (!cover?.key) throw new AppError(404, 'not_found', 'No cover image');
     reply.header('cache-control', 'private, max-age=120');
     return reply.redirect(await ctx.storage.presignDownload(cover.key, { ttlSeconds: 300 }), 302);
@@ -54,7 +57,7 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
       .where(and(eq(galleries.eventId, ev.id), eq(galleries.isVisible, true)))
       .orderBy(asc(galleries.sortOrder));
     // The chosen cover (it may be a hidden, cover-only image), otherwise the first visible photograph.
-    const hasCover = !!(await findCover(ev.id, ev.coverPhotoId));
+    const hasCover = !!(await findCover(ev));
     return {
       event: {
         name: ev.name,

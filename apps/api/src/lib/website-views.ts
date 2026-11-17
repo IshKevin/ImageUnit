@@ -38,7 +38,7 @@ export function createWebsiteViews(ctx: AppContext) {
     return ev;
   }
 
-  const mediaUrl = (client: ApiClient, photoId: string, kind: 'thumbnail' | 'preview' | 'download') => {
+  const mediaUrl = (client: ApiClient, photoId: string, kind: 'thumbnail' | 'preview' | 'download' | 'cover-thumbnail' | 'cover-preview') => {
     const exp = Math.floor(Date.now() / 1000) + MEDIA_URL_TTL;
     const sig = signMedia(ctx.config.SESSION_SECRET, { photoId, kind, clientId: client.id, exp });
     return `${ctx.config.API_PUBLIC_URL}/api/v1/media/${photoId}/${kind}?c=${client.id}&exp=${exp}&sig=${sig}`;
@@ -56,7 +56,8 @@ export function createWebsiteViews(ctx: AppContext) {
 
   const eventJson = async (e: Event, client: ApiClient) => {
     const coverId = client.scopes.includes('images:read') ? await effectiveCoverId(e) : null;
-    return { ...baseEventJson(e), cover: coverId ? { thumbnail: mediaUrl(client, coverId, 'thumbnail'), preview: mediaUrl(client, coverId, 'preview') } : null };
+    // The cover-* kinds serve the event's cropped cover when one is set, otherwise the photo itself.
+    return { ...baseEventJson(e), cover: coverId ? { thumbnail: mediaUrl(client, coverId, 'cover-thumbnail'), preview: mediaUrl(client, coverId, 'cover-preview') } : null };
   };
   const baseEventJson = (e: Event) => ({
     id: e.id,

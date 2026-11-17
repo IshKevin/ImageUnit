@@ -57,6 +57,13 @@
       "when": 1793099864642,
       "tag": "0007_sso_session_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795392000000,
+      "tag": "0008_event_cover_crop",
+      "breakpoints": true
     }
   ]
 }

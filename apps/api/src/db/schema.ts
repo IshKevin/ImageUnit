@@ -97,6 +97,8 @@ export const sessions = pgTable(
   (t) => [uniqueIndex('sessions_token_hash_unique').on(t.tokenHash), index('sessions_user_idx').on(t.userId)],
 );
 
+export type CoverCrop = { x: number; y: number; width: number; height: number };
+
 export const events = pgTable(
   'events',
   {
@@ -112,7 +114,7 @@ export const events = pgTable(
     status: eventStatus('status').notNull().default('draft'),
     visibility: eventVisibility('visibility').notNull().default('public'),
     accessPasswordHash: text('access_password_hash'),
-    downloadPolicy: downloadPolicy('download_policy').notNull().default('preview'),
+    downloadPolicy: downloadPolicy('download_policy').notNull().default('full'),
     /** Public access ends at this instant. Expiry never touches stored media. */
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     publishedAt: timestamp('published_at', { withTimezone: true }),
@@ -120,6 +122,11 @@ export const events = pgTable(
     /** When an archived event becomes due for administrator deletion review. */
     retentionReviewAt: timestamp('retention_review_at', { withTimezone: true }),
     coverPhotoId: uuid('cover_photo_id'),
+    /** Optional crop of the cover photo, as fractions (0–1) of the upright image. */
+    coverCrop: jsonb('cover_crop').$type<CoverCrop>(),
+    /** Cropped cover renditions, present only while a crop is set. */
+    coverPreviewKey: text('cover_preview_key'),
+    coverThumbKey: text('cover_thumb_key'),
     paymentModel: paymentModel('payment_model').notNull().default('free'),
     paymentStatus: paymentStatus('payment_status'),
     createdAt: createdAt(),

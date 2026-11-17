@@ -8,6 +8,7 @@ import { loadManagedEvent, makeGuards } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { actorFromRequest, audit } from '../lib/audit.js';
 import { hashPassword } from '../lib/crypto.js';
+import { coverCropKeys, croppedCoverKey, renderCoverCrop } from '../lib/cover.js';
 import { badRequest, conflict, forbidden } from '../lib/errors.js';
 import { assertTransition } from '../lib/lifecycle.js';
 import { photoKeys } from '../lib/media.js';
@@ -36,13 +37,22 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
   const guard = makeGuards(ctx);
   const dto = (e: Event, extra?: Record<string, unknown>) => eventDto(e, ctx.config.PUBLIC_WEB_URL, extra);
 
-  /** Cover image: the chosen photo (even a hidden, cover-only one), otherwise the first visible photo. */
-  async function coverUrl(eventId: string, coverPhotoId: string | null, size: 'thumb' | 'preview') {
-    const keyCol = size === 'thumb' ? photos.thumbKey : photos.previewKey;
-    let key: string | null | undefined;
-    if (coverPhotoId) key = (await ctx.db.select({ key: keyCol }).from(photos).where(and(eq(photos.id, coverPhotoId), eq(photos.eventId, eventId), eq(photos.status, 'ready'))))[0]?.key;
-    if (!key) key = (await ctx.db.select({ key: keyCol }).from(photos).where(and(eq(photos.eventId, eventId), eq(photos.status, 'ready'), eq(photos.isHidden, false))).orderBy(photos.sortOrder, photos.takenAt, photos.createdAt).limit(1))[0]?.key;
-    return key ? ctx.storage.presignDownload(key, { ttlSeconds: 900 }) : null;
+  /**
+   * Cover image: the chosen photo (even a hidden, cover-only one), otherwise the first visible photo.
+   * coverUrl is what visitors and websites see (cropped when a crop is set); the source fields give the
+   * uncropped photo so the crop editor can show the whole frame.
+   */
+  async function coverInfo(ev: Event) {
+    const cols = { id: photos.id, previewKey: photos.previewKey, mediaType: photos.mediaType, width: photos.width, height: photos.height };
+    let src = ev.coverPhotoId ? (await ctx.db.select(cols).from(photos).where(and(eq(photos.id, ev.coverPhotoId), eq(photos.eventId, ev.id), eq(photos.status, 'ready'))))[0] : undefined;
+    if (!src?.previewKey) src = (await ctx.db.select(cols).from(photos).where(and(eq(photos.eventId, ev.id), eq(photos.status, 'ready'), eq(photos.isHidden, false))).orderBy(photos.sortOrder, photos.takenAt, photos.createdAt).limit(1))[0];
+    if (!src?.previewKey) return { coverUrl: null, coverSource: null };
+    const sourceUrl = await ctx.storage.presignDownload(src.previewKey, { ttlSeconds: 900 });
+    const cropped = croppedCoverKey(ev, src.id, 'preview');
+    return {
+      coverUrl: cropped ? await ctx.storage.presignDownload(cropped, { ttlSeconds: 900 }) : sourceUrl,
+      coverSource: { photoId: src.id, url: sourceUrl, width: src.width, height: src.height, croppable: src.mediaType === 'image' },
+    };
   }
 
   async function uniqueSlug(name: string) {
@@ -104,7 +114,7 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
           storageBytes: sql<number>`(select coalesce(sum(size_bytes + preview_size_bytes + thumb_size_bytes), 0) from ${photos} where ${photos.eventId} = ${col(events.id)})::float8`,
           memberCount: sql<number>`(select count(*) from ${eventMembers} m where m.event_id = ${col(events.id)})::int`,
           sharedWithMe: sql<boolean>`${events.ownerId} <> ${u.id}`,
-          coverThumbKey: sql<string | null>`(select p.thumb_key from ${photos} p where p.id = coalesce(${events.coverPhotoId}, (select p2.id from ${photos} p2 where p2.event_id = ${col(events.id)} and p2.status = 'ready' and p2.is_hidden = false order by p2.sort_order, p2.taken_at, p2.created_at limit 1)))`,
+          coverThumbKey: sql<string | null>`coalesce(${events.coverThumbKey}, (select p.thumb_key from ${photos} p where p.id = coalesce(${events.coverPhotoId}, (select p2.id from ${photos} p2 where p2.event_id = ${col(events.id)} and p2.status = 'ready' and p2.is_hidden = false order by p2.sort_order, p2.taken_at, p2.created_at limit 1))))`,
         })
         .from(events)
         .innerJoin(users, eq(users.id, events.ownerId))
@@ -143,7 +153,7 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
         eventDate: eventFields.eventDate.optional(),
         location: eventFields.location.optional(),
         visibility: eventFields.visibility.default('public'),
-        downloadPolicy: eventFields.downloadPolicy.default('preview'),
+        downloadPolicy: eventFields.downloadPolicy.default('full'),
         password: eventFields.password.optional(),
         expiresAt: futureDate.optional(),
         ownerId: z.string().uuid().optional(),
@@ -190,7 +200,58 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
   app.get('/events/:id', { preHandler: guard.perm('events:view') }, async (req) => {
     const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id, 'contribute');
     const [{ n } = { n: 0 }] = await ctx.db.select({ n: count() }).from(eventMembers).where(eq(eventMembers.eventId, ev.id));
-    return { event: dto(ev, { myAccess: req.eventAccess, memberCount: n, coverUrl: await coverUrl(ev.id, ev.coverPhotoId, 'preview') }) };
+    return { event: dto(ev, { myAccess: req.eventAccess, memberCount: n, ...(await coverInfo(ev)) }) };
+  });
+
+  /**
+   * Crops the cover. Saving a crop also pins that photo as the cover, so an automatic cover cannot
+   * change underneath it. A null crop restores the full photo.
+   */
+  app.put('/events/:id/cover-crop', { preHandler: guard.perm('events:edit') }, async (req) => {
+    const unit = z.number().min(0).max(1);
+    const body = parse(
+      z.object({
+        photoId: z.string().uuid(),
+        crop: z
+          .object({ x: unit, y: unit, width: unit.gt(0), height: unit.gt(0) })
+          .refine((c) => c.x + c.width <= 1.0001 && c.y + c.height <= 1.0001, 'The crop must lie inside the image')
+          .nullable(),
+      }),
+      req.body,
+    );
+    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id);
+    if (['archived', 'scheduled_for_deletion'].includes(ev.status) && req.user!.role !== 'admin') throw forbidden('Archived events are read-only');
+    const [photo] = await ctx.db.select().from(photos).where(and(eq(photos.id, body.photoId), eq(photos.eventId, ev.id), eq(photos.status, 'ready')));
+    if (!photo) throw badRequest('Cover photo must be a ready photo of this event');
+    if (photo.mediaType !== 'image') throw badRequest('Only photographs can be cropped');
+
+    const keys = body.crop ? await renderCoverCrop(ctx, photo, body.crop) : null;
+    const patch: Partial<Event> = {
+      coverPhotoId: photo.id,
+      coverCrop: body.crop,
+      coverPreviewKey: keys?.previewKey ?? null,
+      coverThumbKey: keys?.thumbKey ?? null,
+    };
+    let updated: Event;
+    try {
+      updated = await ctx.db.transaction(async (tx) => {
+        const [row] = await tx.update(events).set(patch).where(eq(events.id, ev.id)).returning();
+        await audit(tx, actorFromRequest(req), {
+          action: 'event.updated',
+          entityType: 'event',
+          entityId: ev.id,
+          eventId: ev.id,
+          before: { coverPhotoId: ev.coverPhotoId, coverCrop: ev.coverCrop },
+          after: { coverPhotoId: row!.coverPhotoId, coverCrop: row!.coverCrop },
+        });
+        return row!;
+      });
+    } catch (err) {
+      if (keys) await ctx.storage.delete([keys.previewKey, keys.thumbKey]).catch(() => undefined);
+      throw err;
+    }
+    await ctx.storage.delete(coverCropKeys(ev)).catch((err) => req.log.warn({ err }, 'old cover crop cleanup failed'));
+    return { event: dto(updated, { ...(await coverInfo(updated)) }) };
   });
 
   app.patch('/events/:id', { preHandler: guard.perm('events:edit') }, async (req) => {
@@ -243,6 +304,9 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
 
     const { password, ...plain } = body;
     const patch: Partial<Event> = { ...plain };
+    // A crop belongs to one photo: choosing another cover (or automatic) drops it.
+    const dropsCrop = body.coverPhotoId !== undefined && body.coverPhotoId !== ev.coverPhotoId && !!ev.coverCrop;
+    if (dropsCrop) Object.assign(patch, { coverCrop: null, coverPreviewKey: null, coverThumbKey: null });
     if (password !== undefined) patch.accessPasswordHash = password ? await hashPassword(password) : null;
     const nextVisibility = body.visibility ?? ev.visibility;
     const nextHasPassword = password !== undefined ? !!password : !!ev.accessPasswordHash;
@@ -261,6 +325,7 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
       });
       return row!;
     });
+    if (dropsCrop) await ctx.storage.delete(coverCropKeys(ev)).catch((err) => req.log.warn({ err }, 'cover crop cleanup failed'));
     return { event: dto(updated) };
   });
 
@@ -328,7 +393,7 @@ export const eventRoutes: FastifyPluginAsync = async (app) => {
       before: dto(ev),
       meta: { photoCount: rows.length },
     });
-    await ctx.storage.delete(rows.flatMap(photoKeys));
+    await ctx.storage.delete([...rows.flatMap(photoKeys), ...coverCropKeys(ev)]);
     await ctx.db.delete(events).where(eq(events.id, ev.id));
     reply.code(204);
   });

@@ -9,6 +9,8 @@ export class ApiError extends Error {
   }
 }
 
+export interface CoverCrop { x: number; y: number; width: number; height: number }
+
 export async function api<T = unknown>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const { json, headers, ...rest } = init;
   const res = await fetch(`/api${path}`, {
@@ -74,6 +76,8 @@ export interface EventItem {
   archivedAt: string | null;
   retentionReviewAt: string | null;
   coverPhotoId: string | null;
+  /** Crop of the cover photo as fractions (0–1) of the upright image; null shows the whole photo. */
+  coverCrop?: CoverCrop | null;
   shareUrl: string;
   isPubliclyAvailable: boolean;
   /** 'manage' = owner/editor/admin; 'contribute' = a photographer invited to this event. */
@@ -81,6 +85,8 @@ export interface EventItem {
   memberCount?: number;
   /** Short-lived link to the cover (chosen photo, or the first photograph when none is chosen). */
   coverUrl?: string | null;
+  /** The uncropped photo behind the cover (single-event responses only), for the crop editor. */
+  coverSource?: { photoId: string; url: string; width: number | null; height: number | null; croppable: boolean } | null;
   photoCount?: number;
   readyCount?: number;
   storageBytes?: number;

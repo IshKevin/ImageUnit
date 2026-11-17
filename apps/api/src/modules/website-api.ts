@@ -8,6 +8,7 @@ import { isUuid } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
 import { effectiveDownloadPolicy, isPubliclyAvailable } from '../lib/access.js';
 import { signMedia, verifyMedia, type Scope } from '../lib/api-keys.js';
+import { croppedCoverKey } from '../lib/cover.js';
 import { AppError, forbidden, notFound } from '../lib/errors.js';
 import { downloadName } from '../lib/media.js';
 import { track } from '../lib/public-access.js';
@@ -104,7 +105,7 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
 
   // Media is delivered through signed, expiring URLs. Each hit re-validates the credential, the event and the download policy.
   app.get('/v1/media/:id/:kind', async (req, reply) => {
-    const { id, kind } = parse(z.object({ id: z.string().uuid(), kind: z.enum(['thumbnail', 'preview', 'download']) }), req.params);
+    const { id, kind } = parse(z.object({ id: z.string().uuid(), kind: z.enum(['thumbnail', 'preview', 'download', 'cover-thumbnail', 'cover-preview']) }), req.params);
     const q = parse(z.object({ c: z.string().uuid(), exp: z.coerce.number(), sig: z.string().min(10).max(100) }), req.query);
     if (!verifyMedia(ctx.config.SESSION_SECRET, { photoId: id, kind, clientId: q.c, exp: q.exp }, q.sig)) throw forbidden('Invalid or expired media link');
 
@@ -137,6 +138,9 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
       key = policy === 'full' ? row.p.originalKey : row.p.previewKey;
       await track(ctx, req, { eventId: row.ev.id, photoId: id, type: 'download', source: 'api' });
       usage.record(client.id, { bytes: policy === 'full' ? row.p.sizeBytes : row.p.previewSizeBytes });
+    } else if (kind === 'cover-thumbnail' || kind === 'cover-preview') {
+      const size = kind === 'cover-thumbnail' ? 'thumb' : 'preview';
+      key = croppedCoverKey(row.ev, id, size) ?? (size === 'thumb' ? row.p.thumbKey : row.p.previewKey);
     } else {
       key = kind === 'thumbnail' ? row.p.thumbKey : row.p.previewKey;
     }

@@ -2,7 +2,8 @@ import type { Event } from '../db/schema.js';
 import { isPubliclyAvailable } from '../lib/access.js';
 
 export function eventDto(e: Event, webUrl: string, extra: Record<string, unknown> = {}) {
-  const { accessPasswordHash, ...rest } = e;
+  // Storage keys stay internal; clients get signed URLs instead.
+  const { accessPasswordHash, coverPreviewKey: _p, coverThumbKey: _t, ...rest } = e;
   return {
     ...rest,
     hasPassword: !!accessPasswordHash,
