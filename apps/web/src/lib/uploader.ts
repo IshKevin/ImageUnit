@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { post } from './api';
+import { ApiError, post } from './api';
 
 export type UploadStatus = 'queued' | 'uploading' | 'finalizing' | 'done' | 'failed';
 export interface UploadItem {
@@ -54,6 +54,18 @@ function validate(file: File): string | undefined {
 const CONCURRENCY = 4;
 const INIT_BATCH = 100;
 const COMPLETE_BATCH = 20;
+/** Each file and each finalize request is tried this many times before it is shown as failed. */
+const ATTEMPTS = 3;
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Errors worth trying again: lost connections, rate limits and server-side hiccups (not "you may not do this"). */
+const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status === 429 || e.status >= 500;
+
+class UploadError extends Error {
+  constructor(message: string, public retryable: boolean) {
+    super(message);
+  }
+}
 
 interface InitResponse {
   uploads: { photoId: string; filename: string; uploadUrl: string }[];
@@ -70,7 +82,8 @@ function putFile(url: string, file: File, contentType: string, onProgress: (p: n
     xhr.open('PUT', url);
     xhr.setRequestHeader('content-type', contentType);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
-    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Storage rejected the upload (${xhr.status})`)));
+    // 5xx/429 are storage hiccups; 403 is usually an upload link that expired while queued (a fresh link fixes both).
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new UploadError(`Storage rejected the upload (${xhr.status})`, xhr.status >= 500 || xhr.status === 429 || xhr.status === 403)));
     xhr.onerror = () => {
       let host = 'the storage server';
       try {
@@ -78,9 +91,9 @@ function putFile(url: string, file: File, contentType: string, onProgress: (p: n
       } catch {
         /* keep the generic wording */
       }
-      reject(new Error(`Could not reach the file storage (${host}). Check your connection. If it persists, ask an administrator to check the storage address and CORS settings.`));
+      reject(new UploadError(`Could not reach the file storage (${host}). Check your connection. If it persists, ask an administrator to check the storage address and CORS settings.`, true));
     };
-    xhr.onabort = () => reject(new Error('Cancelled'));
+    xhr.onabort = () => reject(new UploadError('Cancelled', false));
     xhr.send(file);
   });
 }
@@ -118,7 +131,15 @@ export function useUploader(eventId: string, galleryId: string | undefined, onSe
     async (batch: UploadItem[]) => {
       if (!batch.length) return;
       try {
-        const res = await post<CompleteResponse>(`/events/${eventId}/uploads/complete`, { photoIds: batch.map((b) => b.photoId) });
+        let res: CompleteResponse | undefined;
+        for (let attempt = 1; !res; attempt++) {
+          try {
+            res = await post<CompleteResponse>(`/events/${eventId}/uploads/complete`, { photoIds: batch.map((b) => b.photoId) });
+          } catch (e) {
+            if (attempt >= ATTEMPTS || !isTransient(e)) throw e;
+            await wait(1500 * attempt);
+          }
+        }
         const byId = new Map(res.results.map((r) => [r.photoId, r]));
         for (const b of batch) {
           const r = byId.get(b.photoId!);
@@ -169,7 +190,19 @@ export function useUploader(eventId: string, galleryId: string | undefined, onSe
           if (!item) return;
           patch(item.id, { status: 'uploading', progress: 0, error: undefined });
           try {
-            await putFile(item.uploadUrl!, item.file, item.contentType, (p) => patch(item.id, { progress: p }), (x) => xhrs.current.add(x));
+            let url = item.uploadUrl!;
+            for (let attempt = 1; ; attempt++) {
+              try {
+                await putFile(url, item.file, item.contentType, (p) => patch(item.id, { progress: p }), (x) => xhrs.current.add(x));
+                break;
+              } catch (e) {
+                if (cancelled.current || attempt >= ATTEMPTS || !(e instanceof UploadError && e.retryable)) throw e;
+                patch(item.id, { progress: 0 });
+                await wait(2000 * attempt);
+                // A fresh link, in case the old one expired while the file waited in the queue.
+                url = (await post<{ uploadUrl: string }>(`/photos/${item.photoId}/upload-url`)).uploadUrl;
+              }
+            }
             patch(item.id, { status: 'finalizing', progress: 1 });
             pending.push(item);
             if (pending.length >= COMPLETE_BATCH) await finalize(pending.splice(0));

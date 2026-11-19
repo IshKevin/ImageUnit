@@ -140,7 +140,7 @@ export function createWebsiteViews(ctx: AppContext) {
       if (!col) throw notFound('Collection not found');
     }
 
-    const conds: SQL[] = [...publiclyVisibleMedia(sql`${galleries.isVisible}`)];
+    const conds: SQL[] = [...publiclyVisibleMedia(sql`${galleries.isVisible}`, { inCollection: !!f.collectionId })];
     if (client.allowedEventIds !== null) conds.push(inArray(events.id, client.allowedEventIds));
     if (f.eventId) conds.push(eq(events.id, f.eventId));
     if (f.id) conds.push(eq(photos.id, f.id));

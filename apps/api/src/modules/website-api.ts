@@ -1,16 +1,17 @@
-import { and, asc, count, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { q } from '../lib/sql.js';
 import type { UsageRecorder } from '../lib/usage.js';
-import { apiClients, events, galleries, photos, type ApiClient, type Event } from '../db/schema.js';
+import { apiClients, collectionItems, collections, collectionWebsites, events, galleries, photos, type ApiClient, type Event } from '../db/schema.js';
 import { isUuid } from '../http/guards.js';
 import { pageParams, parse } from '../http/validate.js';
-import { effectiveDownloadPolicy, isPubliclyAvailable } from '../lib/access.js';
+import { effectiveDownloadPolicy } from '../lib/access.js';
 import { signMedia, verifyMedia, type Scope } from '../lib/api-keys.js';
 import { croppedCoverKey } from '../lib/cover.js';
 import { AppError, forbidden, notFound } from '../lib/errors.js';
 import { downloadName } from '../lib/media.js';
+import { COLLECTION_EVENT_STATUSES } from '../lib/media-query.js';
 import { track } from '../lib/public-access.js';
 import { createWebsiteViews } from '../lib/website-views.js';
 import { createWebsiteAuthenticator } from '../lib/website-auth.js';
@@ -44,6 +45,18 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
 
   const views = createWebsiteViews(ctx);
   const { visibleEvents, loadEvent } = views;
+
+  /** The photo is in a published collection assigned to this website, from a non-private event that is still up (active or merely expired). */
+  const inPublishedCollection = (client: ApiClient) =>
+    and(
+      COLLECTION_EVENT_STATUSES,
+      ne(events.visibility, 'private'),
+      ...(client.allowedEventIds !== null ? [inArray(events.id, client.allowedEventIds)] : []),
+      sql`exists (select 1 from ${collectionItems} ci
+        join ${collections} c on c.id = ci.collection_id and c.status = 'published'
+        join ${collectionWebsites} cw on cw.collection_id = c.id and cw.client_id = ${client.id}
+        where ci.photo_id = ${photos.id})`,
+    );
 
   app.get('/v1/events', { preHandler: authenticate('events:read') }, async (req) => {
     const query = parse(z.object({ page: z.coerce.number().optional(), pageSize: z.coerce.number().optional() }), req.query);
@@ -143,9 +156,10 @@ export const websiteApiRoutes: FastifyPluginAsync<{ usage: UsageRecorder }> = as
         eq(photos.id, id),
         eq(photos.status, 'ready'),
         sql`(${photos.isHidden} = false or ${events.coverPhotoId} = ${photos.id})`,
-        ...visibleEvents(client, false),
+        // Reachable through its live event, or through a published collection on this website (collections outlive the event's expiry).
+        or(and(...visibleEvents(client, false)), inPublishedCollection(client)),
       ));
-    if (!row || !isPubliclyAvailable(row.ev) || (row.g && !row.g.isVisible)) throw notFound('Photograph not found');
+    if (!row || (row.g && !row.g.isVisible)) throw notFound('Photograph not found');
 
     let key: string | null;
     let policyIsFull = false;

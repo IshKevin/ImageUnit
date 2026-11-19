@@ -24,10 +24,20 @@ export function textSearch(q: string, opts: { withEvent?: boolean } = {}): SQL |
 
 export const hasTag = (tag: string) => sql`${photos.tags} @> array[${tag.trim().toLowerCase()}]::text[]`;
 
-/** Conditions for media that may be shown publicly: the event is live, public-ish and the item is ready and visible. */
-export const publiclyVisibleMedia = (galleriesVisibleColumn: SQL): SQL[] => [
-  sql`${events.status} = 'active'`,
-  sql`(${events.expiresAt} is null or ${events.expiresAt} > now())`,
+/**
+ * Event states whose media a published collection keeps showing. A collection is curated and published on its own,
+ * so the source event reaching its access expiry must not empty it. Archived or deleted events still take media down.
+ */
+export const COLLECTION_EVENT_STATUSES = sql`${events.status} in ('active', 'expired')`;
+
+/**
+ * Conditions for media that may be shown publicly: the event is live, public-ish and the item is ready and visible.
+ * With `inCollection`, the event's expiry is ignored (see COLLECTION_EVENT_STATUSES).
+ */
+export const publiclyVisibleMedia = (galleriesVisibleColumn: SQL, opts: { inCollection?: boolean } = {}): SQL[] => [
+  ...(opts.inCollection
+    ? [COLLECTION_EVENT_STATUSES]
+    : [sql`${events.status} = 'active'`, sql`(${events.expiresAt} is null or ${events.expiresAt} > now())`]),
   sql`${events.visibility} <> 'private'`,
   sql`${photos.status} = 'ready'`,
   sql`${photos.isHidden} = false`,

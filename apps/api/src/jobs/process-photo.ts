@@ -34,8 +34,12 @@ export async function processPhoto(ctx: AppContext, photoId: string): Promise<'r
   let original: Buffer;
   try {
     original = await ctx.storage.get(photo.originalKey);
-  } catch {
-    throw new PermanentProcessingError('Original file is missing from storage; upload it again');
+  } catch (err) {
+    // Only a genuinely absent file is permanent. Timeouts and connection errors (storage busy during a big upload)
+    // are rethrown so the queue retries them instead of failing the photo for good.
+    const name = (err as { name?: string }).name;
+    if (name === 'NoSuchKey' || name === 'NotFound') throw new PermanentProcessingError('Original file is missing from storage; upload it again');
+    throw err;
   }
 
   // Trust the bytes, not the declared content type or extension.

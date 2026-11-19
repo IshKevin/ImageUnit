@@ -195,12 +195,22 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
     const rows = await ctx.db.select().from(photos).where(and(eq(photos.eventId, ev.id), inArray(photos.id, photoIds), ...(contributing ? [eq(photos.uploaderId, req.user!.id)] : [])));
     const byId = new Map(rows.map((r) => [r.id, r]));
 
-    const results = await Promise.all(
-      photoIds.map(async (id) => {
-        const p = byId.get(id);
-        if (!p) return { photoId: id, ok: false, error: 'Unknown photograph' };
-        if (p.status !== 'pending_upload' && p.status !== 'failed') return { photoId: id, ok: true, status: p.status }; // idempotent
-        const head = await ctx.storage.head(p.originalKey);
+    const finalizeOne = async (id: string) => {
+      const p = byId.get(id);
+      if (!p) return { photoId: id, ok: false, error: 'Unknown photograph' };
+      if (p.status !== 'pending_upload' && p.status !== 'failed') return { photoId: id, ok: true, status: p.status }; // idempotent
+      try {
+        // Under load, storage can take a moment to list an object it just accepted, or briefly fail: look again before giving up.
+        let head = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            head = await ctx.storage.head(p.originalKey);
+            if (head && head.size === p.sizeBytes) break;
+          } catch (err) {
+            if (attempt === 3) throw err;
+          }
+          if (attempt < 3) await new Promise((r) => setTimeout(r, 500 * attempt));
+        }
         if (!head) return { photoId: id, ok: false, error: 'File was not received; upload it again' };
         if (head.size !== p.sizeBytes) {
           await ctx.storage.delete([p.originalKey]);
@@ -208,6 +218,22 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
         }
         await enqueuePhoto(ctx, p.id);
         return { photoId: id, ok: true, status: 'uploaded' };
+      } catch (err) {
+        // One file's problem must not fail the whole batch.
+        req.log.warn({ photoId: id, err: (err as Error).message }, 'upload finalize failed');
+        return { photoId: id, ok: false, error: 'Could not confirm the upload; retry it' };
+      }
+    };
+
+    // A few at a time, so a big batch does not swamp storage or the database pool.
+    const results: Awaited<ReturnType<typeof finalizeOne>>[] = new Array(photoIds.length);
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(4, photoIds.length) }, async () => {
+        while (next < photoIds.length) {
+          const i = next++;
+          results[i] = await finalizeOne(photoIds[i]!);
+        }
       }),
     );
     return { results };

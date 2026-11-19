@@ -17,7 +17,7 @@
 | `METRICS_TOKEN` | random string | protects `/metrics` |
 | `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD` | your admin login | first boot only; remove afterwards |
 
-Optional: `CORS_ORIGINS` (see below), `STORAGE_TOTAL_BYTES` (capacity shown in the dashboard), `MAX_UPLOAD_BYTES` (photos, default 100 MB), `MAX_VIDEO_BYTES` (videos, default 2 GB), `WORKER_CONCURRENCY` (photo processing, default 4), `WORKER_VIDEO_CONCURRENCY` (simultaneous video conversions per worker, default 1), `LOG_LEVEL`.
+Optional: `CORS_ORIGINS` (see below), `STORAGE_TOTAL_BYTES` (capacity shown in the dashboard), `MAX_UPLOAD_BYTES` (photos, default 100 MB), `MAX_VIDEO_BYTES` (videos, default 2 GB), `WORKER_CONCURRENCY` (photo processing, default 2), `WORKER_VIDEO_CONCURRENCY` (simultaneous video conversions per worker, default 1), `LOG_LEVEL`.
 `ops/gen-env.sh` prints a full set of strong values you can paste in (`make prod-env DOMAIN=example.com`, then copy from `.env.production`).
 
 ## 2. Domains (Coolify → each service → Domains)

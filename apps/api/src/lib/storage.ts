@@ -139,6 +139,9 @@ export function createS3Storage(config: Config): Storage {
 }
 
 /** In-memory implementation for tests. */
+/** Same error name S3 uses for an absent object, so callers can tell "missing" from "storage trouble". */
+const missing = (key: string) => Object.assign(new Error(`missing object ${key}`), { name: 'NoSuchKey' });
+
 export function createMemoryStorage(): Storage & { objects: Map<string, { body: Buffer; contentType: string }> } {
   const objects = new Map<string, { body: Buffer; contentType: string }>();
   return {
@@ -156,7 +159,7 @@ export function createMemoryStorage(): Storage & { objects: Map<string, { body: 
     },
     async get(key) {
       const o = objects.get(key);
-      if (!o) throw new Error(`missing object ${key}`);
+      if (!o) throw missing(key);
       return o.body;
     },
     async put(key, body, contentType) {
@@ -164,7 +167,7 @@ export function createMemoryStorage(): Storage & { objects: Map<string, { body: 
     },
     async downloadToFile(key, filePath) {
       const o = objects.get(key);
-      if (!o) throw new Error(`missing object ${key}`);
+      if (!o) throw missing(key);
       await writeFile(filePath, o.body);
     },
     async uploadFile(key, filePath, contentType) {
@@ -172,7 +175,7 @@ export function createMemoryStorage(): Storage & { objects: Map<string, { body: 
     },
     async stream(key) {
       const o = objects.get(key);
-      if (!o) throw new Error(`missing object ${key}`);
+      if (!o) throw missing(key);
       return { body: Readable.from([o.body]), size: o.body.length };
     },
     async delete(keys) {

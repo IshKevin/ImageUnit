@@ -336,6 +336,25 @@ describe('collection cover', () => {
   }
   const sharpSize = async (buf: Buffer) => { const m = await (await import('sharp')).default(buf).metadata(); return [m.width, m.height]; };
 
+  it('a published collection keeps its media after the source event expires', async () => {
+    const { c, v1, follow } = await seed();
+    const items = (await v1(`/collections/${c.slug}/media`)).json().items as { id: string; event: { id: string }; urls: { preview: string } }[];
+    expect(items).toHaveLength(2);
+    const evId = items[0]!.event.id;
+    // The event reaches its expiry and the maintenance job marks it expired.
+    await t.ctx.db.update(events).set({ status: 'expired', expiresAt: new Date(Date.now() - 1000) }).where(eq(events.id, evId));
+
+    const after = (await v1(`/collections/${c.slug}/media`)).json();
+    expect(after.total).toBe(2);
+    expect((await v1(`/collections/${c.slug}`)).json().collection.mediaCount).toBe(2);
+    expect((await follow(after.items[0].urls.preview)).statusCode).toBe(302);
+
+    // Archiving the event still takes its media down everywhere.
+    await t.ctx.db.update(events).set({ status: 'archived' }).where(eq(events.id, evId));
+    expect((await v1(`/collections/${c.slug}/media`)).json().total).toBe(0);
+    expect((await follow(after.items[0].urls.preview)).statusCode).toBe(404);
+  });
+
   it('crops a chosen item; the dashboard and websites get the cropped cover; choosing another drops it', async () => {
     const { editor, a, b, c, v1, follow, row } = await seed();
     const res = await editor.put(`/api/collections/${c.id}/cover-crop`, { photoId: b, crop: { x: 0, y: 0, width: 0.5, height: 0.5 } });

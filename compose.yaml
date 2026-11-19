@@ -38,7 +38,7 @@ x-app: &app
     MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-104857600}
     MAX_VIDEO_BYTES: ${MAX_VIDEO_BYTES:-2147483648}
     WORKER_VIDEO_CONCURRENCY: ${WORKER_VIDEO_CONCURRENCY:-1}
-    WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+    WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
     # Inside the compose network the services are reached by name.
     DATABASE_URL: postgres://imageunit:${POSTGRES_PASSWORD:-imageunit}@postgres:5432/imageunit
     REDIS_URL: redis://:${REDIS_PASSWORD:-imageunit}@redis:6379

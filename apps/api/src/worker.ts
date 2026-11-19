@@ -10,7 +10,7 @@ import { photos } from './db/schema.js';
 import type { ProcessPhotoJob } from './lib/jobs.js';
 
 const { ctx, pool, redis } = await createContext();
-const concurrency = Number(process.env.WORKER_CONCURRENCY ?? 4);
+const concurrency = Number(process.env.WORKER_CONCURRENCY ?? 2);
 
 const handle = async (job: Job<ProcessPhotoJob>) => {
   try {

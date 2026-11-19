@@ -39,6 +39,54 @@ function readZip(buf: Buffer): Map<string, Buffer> {
 const publish = async (owner: Awaited<ReturnType<typeof session>>, id: string) => (await owner.post(`/api/events/${id}/publish`)).json().event;
 
 describe('upload and processing', () => {
+  it('finalizes a batch of 25 even when storage fails for one file, and only that file fails', async () => {
+    const owner = await session(t);
+    const ev = await makeEvent(owner);
+    const data = await testImage(40, 30);
+    const files = Array.from({ length: 25 }, (_, i) => ({ filename: `IMG_${i}.jpg`, contentType: 'image/jpeg', sizeBytes: data.length }));
+    const { uploads } = (await owner.post(`/api/events/${ev.id}/uploads`, { files })).json() as { uploads: { photoId: string; uploadUrl: string }[] };
+    expect(uploads).toHaveLength(25);
+    const keys = uploads.map((u) => decodeURIComponent(u.uploadUrl.replace('memory://upload/', '')));
+    for (const key of keys) t.storage.objects.set(key, { body: data, contentType: 'image/jpeg' });
+
+    const head = t.storage.head;
+    t.storage.head = async (key) => {
+      if (key === keys[3]) throw new Error('socket hang up');
+      return head(key);
+    };
+    try {
+      const res = await owner.post(`/api/events/${ev.id}/uploads/complete`, { photoIds: uploads.map((u) => u.photoId) });
+      expect(res.statusCode).toBe(200);
+      const results = res.json().results as { photoId: string; ok: boolean }[];
+      expect(results.map((r) => r.photoId)).toEqual(uploads.map((u) => u.photoId));
+      expect(results.filter((r) => !r.ok).map((r) => r.photoId)).toEqual([uploads[3]!.photoId]);
+    } finally {
+      t.storage.head = head;
+    }
+  });
+
+  it('retries, instead of permanently failing, when storage is briefly unreachable during processing', async () => {
+    const owner = await session(t);
+    const ev = await makeEvent(owner);
+    const up = await uploadPhoto(t, owner, ev.id);
+    const get = t.storage.get;
+    t.storage.get = async () => {
+      throw Object.assign(new Error('connect ETIMEDOUT'), { name: 'TimeoutError' });
+    };
+    try {
+      const err = await processPhoto(t.ctx, up.photoId).catch((e) => e);
+      expect(err).not.toBeInstanceOf(PermanentProcessingError);
+    } finally {
+      t.storage.get = get;
+    }
+    expect(await processPhoto(t.ctx, up.photoId)).toBe('ready');
+
+    // A file that is really gone is still a permanent failure.
+    const gone = await uploadPhoto(t, owner, ev.id);
+    t.storage.objects.delete(gone.key);
+    expect(await processPhoto(t.ctx, gone.photoId).catch((e) => e)).toBeInstanceOf(PermanentProcessingError);
+  });
+
   it('runs upload → process → ready and produces original, preview and thumbnail', async () => {
     const owner = await session(t);
     const ev = await makeEvent(owner);
