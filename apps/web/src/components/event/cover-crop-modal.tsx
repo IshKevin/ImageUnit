@@ -17,6 +17,8 @@ const ASPECTS = [
 type AspectId = (typeof ASPECTS)[number]['id'];
 
 const MIN = 0.05; // smallest crop edge, as a fraction of the image
+/** Below this width (in original pixels) a cover looks soft when shown as a full-width banner. */
+const SHARP_WIDTH = 1920;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /** Largest box of the given pixel aspect that keeps the current centre (and roughly the current width). */
@@ -50,10 +52,12 @@ interface CoverCropModalProps {
   onSaved: () => void;
   /** Where the cover appears, for the explanation at the top. */
   usedIn: string;
+  /** Pixel size of the original picture, when known, to warn about crops too small to stay sharp. */
+  sourceSize?: { width: number | null; height: number | null } | null;
 }
 
 /** Crop / reposition editor shared by event and collection covers. */
-export function CoverCropModal({ open, onClose, sourceUrl, savedCrop, onSave, onSaved, usedIn }: CoverCropModalProps) {
+export function CoverCropModal({ open, onClose, sourceUrl, savedCrop, onSave, onSaved, usedIn, sourceSize }: CoverCropModalProps) {
   const frame = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const [imgRatio, setImgRatio] = useState<number | null>(null);
@@ -159,6 +163,15 @@ export function CoverCropModal({ open, onClose, sourceUrl, savedCrop, onSave, on
     if (imgRatio) setCrop((c) => fitAspect(c, value, imgRatio));
   };
 
+  // Width of the selection in the original's pixels. The editor shows a reduced copy, so its own size says nothing;
+  // the stored dimensions may be pre-rotation, so take whichever edge matches the picture's upright shape.
+  const originalWidth = (() => {
+    if (!imgRatio || !sourceSize?.width || !sourceSize.height) return null;
+    const { width: w, height: h } = sourceSize;
+    return (w >= h) === (imgRatio >= 1) ? w : h;
+  })();
+  const cropPixels = originalWidth ? Math.round(crop.width * originalWidth) : null;
+
   const pct = (v: number) => `${v * 100}%`;
   const corners = [
     ['nw', 'left-0 top-0 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize'],
@@ -216,6 +229,12 @@ export function CoverCropModal({ open, onClose, sourceUrl, savedCrop, onSave, on
             )}
           </div>
         </div>
+
+        {cropPixels !== null && cropPixels < SHARP_WIDTH && (
+          <p role="status" className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
+            The selected area is only {cropPixels.toLocaleString()} pixels wide, so it may look soft as a full-width banner. Select a larger area, or use a higher-resolution photo, for a sharp cover.
+          </p>
+        )}
 
         <ErrorNote error={save.error} />
         <div className="flex flex-col-reverse gap-2 border-t border-border pt-4 sm:flex-row sm:items-center">

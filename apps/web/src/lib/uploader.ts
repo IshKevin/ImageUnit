@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, post } from './api';
 
 export type UploadStatus = 'queued' | 'uploading' | 'finalizing' | 'done' | 'failed';
@@ -18,6 +18,8 @@ export interface UploadItem {
   error?: string;
   photoId?: string;
   uploadUrl?: string;
+  /** When uploadUrl was issued; links last an hour, so older ones are refreshed before use. */
+  urlAt?: number;
 }
 
 export const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/tiff', 'image/avif'];
@@ -51,11 +53,19 @@ function validate(file: File): string | undefined {
   if (!isVideoFile(file) && file.size > MAX_IMAGE_BYTES) return 'Photo is larger than the 100 MB limit';
   return undefined;
 }
-const CONCURRENCY = 4;
+/** Parallel file transfers. Browsers allow about six connections per host, so more would only queue. */
+const CONCURRENCY = 6;
+/** Files reserved (rows + upload links) per request. Reserved just ahead of the transfers, not all at the start. */
 const INIT_BATCH = 100;
 const COMPLETE_BATCH = 20;
 /** Each file and each finalize request is tried this many times before it is shown as failed. */
 const ATTEMPTS = 3;
+/** Upload links are valid for an hour; anything older than this is replaced before the transfer starts. */
+const URL_MAX_AGE_MS = 45 * 60 * 1000;
+/** How often the list on screen is refreshed while uploading. Thousands of files would freeze the page if every progress tick re-rendered. */
+const RENDER_INTERVAL_MS = 250;
+/** Rows shown in the on-screen list; the counters cover the rest. */
+const VISIBLE_ROWS = 50;
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Errors worth trying again: lost connections, rate limits and server-side hiccups (not "you may not do this"). */
@@ -73,6 +83,18 @@ interface InitResponse {
 }
 interface CompleteResponse {
   results: { photoId: string; ok: boolean; error?: string }[];
+}
+
+/** Retries a request on transient failures (lost connection, rate limit, 5xx). */
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (attempt >= ATTEMPTS || !isTransient(e)) throw e;
+      await wait(1500 * attempt);
+    }
+  }
 }
 
 function putFile(url: string, file: File, contentType: string, onProgress: (p: number) => void, register: (x: XMLHttpRequest) => void): Promise<void> {
@@ -101,45 +123,66 @@ function putFile(url: string, file: File, contentType: string, onProgress: (p: n
 /**
  * Bulk upload manager. Files go straight from the browser to object storage using presigned URLs,
  * so the API never proxies photograph bytes. Failures are tracked per file and can be retried individually.
+ *
+ * Built for batches of 10,000+ files:
+ *  - items live in a ref and are updated in place; the screen is refreshed a few times a second, not on every progress tick;
+ *  - files are reserved on the server in batches just ahead of the transfers, so upload links never sit in a queue
+ *    long enough to expire, and cancelling leaves few unused reservations behind;
+ *  - files added while an upload is running join it instead of waiting for another start.
  */
 export function useUploader(eventId: string, galleryId: string | undefined, onSettled: () => void) {
   const [items, setItems] = useState<UploadItem[]>([]);
   const itemsRef = useRef<UploadItem[]>([]);
+  const indexRef = useRef(new Map<string, number>());
   const running = useRef(false);
   const cancelled = useRef(false);
   const xhrs = useRef(new Set<XMLHttpRequest>());
   const idSeq = useRef(0);
+  const renderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const sync = (next: UploadItem[]) => {
-    itemsRef.current = next;
-    setItems(next);
-  };
-  const patch = useCallback((id: string, p: Partial<UploadItem>) => {
-    sync(itemsRef.current.map((i) => (i.id === id ? { ...i, ...p } : i)));
+  const flush = useCallback(() => {
+    if (renderTimer.current) clearTimeout(renderTimer.current);
+    renderTimer.current = null;
+    setItems(itemsRef.current.slice());
   }, []);
+  const scheduleRender = useCallback(() => {
+    if (!renderTimer.current) renderTimer.current = setTimeout(flush, RENDER_INTERVAL_MS);
+  }, [flush]);
+  /** Replaces the whole list (adding or removing items), and shows it right away. */
+  const replaceAll = useCallback((next: UploadItem[]) => {
+    itemsRef.current = next;
+    indexRef.current = new Map(next.map((i, n) => [i.id, n]));
+    flush();
+  }, [flush]);
+  useEffect(() => () => { if (renderTimer.current) clearTimeout(renderTimer.current); }, []);
+
+  /** Updates one item in place: constant time, whatever the size of the batch. */
+  const patch = useCallback((id: string, p: Partial<UploadItem>) => {
+    const n = indexRef.current.get(id);
+    if (n === undefined) return;
+    const cur = itemsRef.current[n]!;
+    itemsRef.current[n] = { ...cur, ...p };
+    scheduleRender();
+  }, [scheduleRender]);
+  const current = (id: string) => {
+    const n = indexRef.current.get(id);
+    return n === undefined ? undefined : itemsRef.current[n];
+  };
 
   const addEntries = useCallback((entries: { file: File; path?: string; galleryName?: string }[]) => {
     const fresh: UploadItem[] = entries.map(({ file, path, galleryName }) => {
       const error = validate(file);
       return { id: `u${idSeq.current++}`, file, contentType: mimeOf(file), path, galleryName, status: error ? 'failed' : 'queued', progress: 0, error } as UploadItem;
     });
-    sync([...itemsRef.current, ...fresh]);
-  }, []);
+    replaceAll([...itemsRef.current, ...fresh]);
+  }, [replaceAll]);
   const addFiles = useCallback((files: File[]) => addEntries(files.map((file) => ({ file }))), [addEntries]);
 
   const finalize = useCallback(
     async (batch: UploadItem[]) => {
       if (!batch.length) return;
       try {
-        let res: CompleteResponse | undefined;
-        for (let attempt = 1; !res; attempt++) {
-          try {
-            res = await post<CompleteResponse>(`/events/${eventId}/uploads/complete`, { photoIds: batch.map((b) => b.photoId) });
-          } catch (e) {
-            if (attempt >= ATTEMPTS || !isTransient(e)) throw e;
-            await wait(1500 * attempt);
-          }
-        }
+        const res = await withRetry(() => post<CompleteResponse>(`/events/${eventId}/uploads/complete`, { photoIds: batch.map((b) => b.photoId) }));
         const byId = new Map(res.results.map((r) => [r.photoId, r]));
         for (const b of batch) {
           const r = byId.get(b.photoId!);
@@ -152,55 +195,80 @@ export function useUploader(eventId: string, galleryId: string | undefined, onSe
     [eventId, patch],
   );
 
-  const run = useCallback(async () => {
-    if (running.current) return;
-    running.current = true;
-    cancelled.current = false;
-    try {
-      // 1. Reserve photographs + presigned URLs in batches.
-      const needInit = itemsRef.current.filter((i) => i.status === 'queued' && !i.uploadUrl);
-      for (let i = 0; i < needInit.length && !cancelled.current; i += INIT_BATCH) {
-        const chunk = needInit.slice(i, i + INIT_BATCH);
-        try {
-          const res = await post<InitResponse>(`/events/${eventId}/uploads`, {
+  /** Reserves photographs and upload links for files that do not have them yet. */
+  const reserve = useCallback(
+    async (chunk: UploadItem[]) => {
+      const need = chunk.map((c) => current(c.id)!).filter((c) => c && c.status === 'queued' && !c.photoId);
+      if (!need.length) return;
+      try {
+        const res = await withRetry(() =>
+          post<InitResponse>(`/events/${eventId}/uploads`, {
             galleryId,
-            files: chunk.map((c) => ({ filename: c.file.name, contentType: c.contentType, sizeBytes: c.file.size, ...(c.galleryName && { galleryName: c.galleryName }) })),
-          });
-          const rejected = new Map(res.rejected.map((r) => [r.filename, r.reason]));
-          const accepted = [...res.uploads];
-          for (const c of chunk) {
-            const idx = accepted.findIndex((u) => u.filename === c.file.name);
-            if (idx >= 0) {
-              const [u] = accepted.splice(idx, 1);
-              patch(c.id, { photoId: u!.photoId, uploadUrl: u!.uploadUrl });
-            } else patch(c.id, { status: 'failed', error: rejected.get(c.file.name) ?? 'Rejected by server' });
-          }
-        } catch (e) {
-          for (const c of chunk) patch(c.id, { status: 'failed', error: (e as Error).message });
+            files: need.map((c) => ({ filename: c.file.name, contentType: c.contentType, sizeBytes: c.file.size, ...(c.galleryName && { galleryName: c.galleryName }) })),
+          }),
+        );
+        const rejected = new Map(res.rejected.map((r) => [r.filename, r.reason]));
+        // Several files can share a name (same name in different folders): hand each reply out once.
+        const byName = new Map<string, InitResponse['uploads']>();
+        for (const u of res.uploads) byName.set(u.filename, [...(byName.get(u.filename) ?? []), u]);
+        const now = Date.now();
+        for (const c of need) {
+          const u = byName.get(c.file.name)?.shift();
+          if (u) patch(c.id, { photoId: u.photoId, uploadUrl: u.uploadUrl, urlAt: now });
+          else patch(c.id, { status: 'failed', error: rejected.get(c.file.name) ?? 'Rejected by server' });
         }
+      } catch (e) {
+        for (const c of need) patch(c.id, { status: 'failed', error: (e as Error).message });
       }
+    },
+    [eventId, galleryId, patch],
+  );
 
-      // 2. Upload with bounded concurrency; finalize in small batches.
+  /** Uploads one batch of queued items: reservations run a chunk ahead of the transfers. */
+  const processBatch = useCallback(
+    async (batch: UploadItem[]) => {
+      const chunks: Promise<void>[] = [];
+      const reserveChunk = (k: number) => {
+        if (k * INIT_BATCH >= batch.length) return Promise.resolve();
+        return (chunks[k] ??= reserve(batch.slice(k * INIT_BATCH, (k + 1) * INIT_BATCH)));
+      };
       const pending: UploadItem[] = [];
-      const queue = itemsRef.current.filter((i) => i.status === 'queued' && i.uploadUrl);
       let cursor = 0;
+
       const worker = async () => {
         while (!cancelled.current) {
-          const item = queue[cursor++];
-          if (!item) return;
+          const pos = cursor++;
+          if (pos >= batch.length) return;
+          const k = Math.floor(pos / INIT_BATCH);
+          await reserveChunk(k);
+          // Halfway through a chunk, start reserving the next one so the transfers never wait for it.
+          if (pos % INIT_BATCH >= INIT_BATCH / 2) void reserveChunk(k + 1);
+          if (cancelled.current) return;
+          const item = current(batch[pos]!.id);
+          if (!item || item.status !== 'queued' || !item.photoId) continue;
+
           patch(item.id, { status: 'uploading', progress: 0, error: undefined });
           try {
-            let url = item.uploadUrl!;
+            let url = item.uploadUrl;
             for (let attempt = 1; ; attempt++) {
               try {
-                await putFile(url, item.file, item.contentType, (p) => patch(item.id, { progress: p }), (x) => xhrs.current.add(x));
+                // A fresh link when there is none (a retry) or the one we hold may have expired.
+                if (!url || !item.urlAt || Date.now() - item.urlAt > URL_MAX_AGE_MS || attempt > 1) {
+                  url = (await withRetry(() => post<{ uploadUrl: string }>(`/photos/${item.photoId}/upload-url`))).uploadUrl;
+                  patch(item.id, { uploadUrl: url, urlAt: Date.now() });
+                }
+                let last = 0;
+                await putFile(url, item.file, item.contentType, (p) => {
+                  // Progress for the list only; skip tiny steps.
+                  if (p - last >= 0.02 || p === 1) { last = p; patch(item.id, { progress: p }); }
+                }, (x) => xhrs.current.add(x));
                 break;
               } catch (e) {
-                if (cancelled.current || attempt >= ATTEMPTS || !(e instanceof UploadError && e.retryable)) throw e;
+                // 409: the server already has this file (an earlier attempt got through); just confirm it.
+                if (e instanceof ApiError && e.status === 409) break;
+                if (cancelled.current || attempt >= ATTEMPTS || !(e instanceof UploadError ? e.retryable : isTransient(e))) throw e;
                 patch(item.id, { progress: 0 });
                 await wait(2000 * attempt);
-                // A fresh link, in case the old one expired while the file waited in the queue.
-                url = (await post<{ uploadUrl: string }>(`/photos/${item.photoId}/upload-url`)).uploadUrl;
               }
             }
             patch(item.id, { status: 'finalizing', progress: 1 });
@@ -213,36 +281,47 @@ export function useUploader(eventId: string, galleryId: string | undefined, onSe
       };
       await Promise.all(Array.from({ length: CONCURRENCY }, worker));
       await finalize(pending.splice(0));
+    },
+    [reserve, finalize, patch],
+  );
+
+  const run = useCallback(async () => {
+    if (running.current) return; // files added meanwhile are picked up by the loop below
+    running.current = true;
+    cancelled.current = false;
+    try {
+      for (;;) {
+        if (cancelled.current) break;
+        const batch = itemsRef.current.filter((i) => i.status === 'queued');
+        if (!batch.length) break;
+        await processBatch(batch);
+      }
     } finally {
       xhrs.current.clear();
       running.current = false;
+      flush();
       onSettled();
     }
-  }, [eventId, galleryId, patch, finalize, onSettled]);
+  }, [processBatch, flush, onSettled]);
 
-  /** Re-queues failed files; the server issues fresh URLs for files it already knows about. */
+  /** Re-queues failed files; each gets a fresh upload link just before it is sent. */
   const retryFailed = useCallback(async () => {
-    const failed = itemsRef.current.filter((i) => i.status === 'failed');
-    for (const f of failed) {
-      if (f.photoId) {
-        try {
-          const r = await post<{ uploadUrl: string }>(`/photos/${f.photoId}/upload-url`);
-          patch(f.id, { status: 'queued', uploadUrl: r.uploadUrl, error: undefined, progress: 0 });
-        } catch (e) {
-          patch(f.id, { error: (e as Error).message });
-        }
-      } else if (!validate(f.file)) patch(f.id, { status: 'queued', error: undefined, progress: 0 });
+    for (const f of itemsRef.current) {
+      if (f.status !== 'failed') continue;
+      if (f.photoId) patch(f.id, { status: 'queued', uploadUrl: undefined, urlAt: undefined, error: undefined, progress: 0 });
+      else if (!validate(f.file)) patch(f.id, { status: 'queued', error: undefined, progress: 0 });
     }
+    flush();
     void run();
-  }, [patch, run]);
+  }, [patch, flush, run]);
 
   const cancel = useCallback(() => {
     cancelled.current = true;
     xhrs.current.forEach((x) => x.abort());
-    sync(itemsRef.current.filter((i) => i.status !== 'queued'));
-  }, []);
+    replaceAll(itemsRef.current.filter((i) => i.status !== 'queued'));
+  }, [replaceAll]);
 
-  const clearDone = useCallback(() => sync(itemsRef.current.filter((i) => i.status !== 'done')), []);
+  const clearDone = useCallback(() => replaceAll(itemsRef.current.filter((i) => i.status !== 'done')), [replaceAll]);
 
   // Warn before closing the tab mid-upload.
   useEffect(() => {
@@ -253,7 +332,24 @@ export function useUploader(eventId: string, galleryId: string | undefined, onSe
     return () => window.removeEventListener('beforeunload', h);
   }, []);
 
-  const count = (s: UploadStatus) => items.filter((i) => i.status === s).length;
-  const inFlight = items.some((i) => i.status === 'queued' || i.status === 'uploading' || i.status === 'finalizing');
-  return { items, addFiles, addEntries, start: run, retryFailed, cancel, clearDone, inFlight, counts: { total: items.length, done: count('done'), failed: count('failed'), remaining: items.length - count('done') - count('failed') } };
+  // One pass over the list per screen refresh: counts, and the rows worth showing (in progress, then failed, then next up).
+  const { counts, visible, inFlight } = useMemo(() => {
+    const c = { queued: 0, uploading: 0, finalizing: 0, done: 0, failed: 0 };
+    const active: UploadItem[] = [];
+    const failed: UploadItem[] = [];
+    const queued: UploadItem[] = [];
+    for (const i of items) {
+      c[i.status]++;
+      if (i.status === 'uploading' || i.status === 'finalizing') { if (active.length < VISIBLE_ROWS) active.push(i); }
+      else if (i.status === 'failed') { if (failed.length < VISIBLE_ROWS) failed.push(i); }
+      else if (i.status === 'queued' && queued.length < VISIBLE_ROWS) queued.push(i);
+    }
+    return {
+      counts: { total: items.length, done: c.done, failed: c.failed, remaining: items.length - c.done - c.failed },
+      visible: [...active, ...failed, ...queued].slice(0, VISIBLE_ROWS),
+      inFlight: c.queued + c.uploading + c.finalizing > 0,
+    };
+  }, [items]);
+
+  return { items, visible, addFiles, addEntries, start: run, retryFailed, cancel, clearDone, inFlight, counts };
 }

@@ -6,8 +6,10 @@ import type { AppContext } from '../context.js';
 import type { CoverCrop, Event } from '../db/schema.js';
 import { badRequest } from './errors.js';
 
-const PREVIEW_EDGE = 2560;
-const THUMB_EDGE = 480;
+// Covers are shown full-width (gallery banner, website heroes) on high-density screens, so they get
+// larger, higher-quality renditions than ordinary photo previews. Re-cropping a cover re-renders it.
+const PREVIEW_EDGE = 3840;
+const THUMB_EDGE = 1024;
 const MAX_PIXELS = 300_000_000;
 export const COVER_UPLOAD_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export const MAX_COVER_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -67,8 +69,8 @@ export async function renderCover(ctx: AppContext, originalKey: string, crop: Co
   let thumb: Buffer;
   try {
     [preview, thumb] = await Promise.all([
-      base().resize({ width: PREVIEW_EDGE, height: PREVIEW_EDGE, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 88, mozjpeg: true }).toBuffer(),
-      base().resize({ width: THUMB_EDGE, height: THUMB_EDGE, fit: 'inside', withoutEnlargement: true }).webp({ quality: 78 }).toBuffer(),
+      base().resize({ width: PREVIEW_EDGE, height: PREVIEW_EDGE, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 92, mozjpeg: true, chromaSubsampling: '4:4:4' }).toBuffer(),
+      base().resize({ width: THUMB_EDGE, height: THUMB_EDGE, fit: 'inside', withoutEnlargement: true }).webp({ quality: 86, smartSubsample: true }).toBuffer(),
     ]);
   } catch (err) {
     throw badRequest(`The image could not be processed: ${(err as Error).message}`);

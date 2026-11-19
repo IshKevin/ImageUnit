@@ -46,7 +46,7 @@ export function UploadPanel({ eventId, galleryId, onSettled, disabled }: { event
     setTimeout(() => void u.start(), 0);
   };
   const pct = u.counts.total ? ((u.counts.done + u.counts.failed) / u.counts.total) * 100 : 0;
-  const visible = u.items.filter((i) => i.status !== 'done').slice(0, 50);
+  const visible = u.visible;
 
   return (
     <Card className="p-5">

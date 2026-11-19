@@ -171,6 +171,7 @@ export function CoverCard({ event }: { event: EventItem }) {
           onSave={(crop) => put(`/events/${event.id}/cover-crop`, { photoId: event.coverSource!.photoId, crop })}
           onSaved={refresh}
           usedIn="the public gallery, the event list and connected websites"
+          sourceSize={event.coverSource}
         />
       )}
 
