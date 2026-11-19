@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { AlertTriangle, Check, EyeOff, Film, ImageIcon, Search, X } from 'lucide-react';
+import { AlertTriangle, Check, EyeOff, Film, ImageIcon, Maximize2, Search, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { BulkBar } from './media/bulk-bar';
 import { DetailModal } from './media/detail-modal';
@@ -252,6 +252,15 @@ export function MediaBrowser({ mode, baseFilter, collectionId, onSelectionChange
                   </button>
                   <button
                     type="button"
+                    {...sel.previewProps(() => setOpen(m))}
+                    aria-label={`Preview ${name}`}
+                    title="Preview (keeps your selection)"
+                    className={clsx('absolute right-0 top-0 grid size-11 place-items-center transition-opacity focus-visible:opacity-100', sel.selecting ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100')}
+                  >
+                    <span className="grid size-7 place-items-center rounded-full bg-black/55 text-white shadow transition-colors hover:bg-black/80"><Maximize2 className="size-3.5" aria-hidden /></span>
+                  </button>
+                  <button
+                    type="button"
                     {...sel.checkboxProps(i)}
                     aria-pressed={isOn}
                     aria-label={`Select ${name}`}
@@ -269,7 +278,12 @@ export function MediaBrowser({ mode, baseFilter, collectionId, onSelectionChange
         <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
       </Card>
 
-      <DetailModal item={open} onClose={() => setOpen(null)} canEdit={canEdit} />
+      <DetailModal
+        item={open}
+        onClose={() => setOpen(null)}
+        canEdit={canEdit}
+        selection={open ? { selected: isSel(open.id), total: count, toggle: () => apply(isSel(open.id) ? [] : [open.id], isSel(open.id) ? [open.id] : []) } : undefined}
+      />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { EyeOff } from 'lucide-react';
+import { Check, EyeOff } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -10,15 +10,18 @@ import { TagInput } from './parts';
 import { patch, type LibraryItem } from '@/lib/api';
 import { bytes, date, displayName, duration, label } from '@/lib/format';
 
-export function DetailModal({ item, onClose, canEdit }: { item: LibraryItem | null; onClose: () => void; canEdit: boolean }) {
+/** Lets the preview add or remove its item from the grid's selection. */
+interface PreviewSelection { selected: boolean; total: number; toggle: () => void }
+
+export function DetailModal({ item, onClose, canEdit, selection }: { item: LibraryItem | null; onClose: () => void; canEdit: boolean; selection?: PreviewSelection }) {
   return (
     <Modal open={!!item} onClose={onClose} title={item ? displayName(item) : 'Details'} wide>
-      {item && <Body key={item.id} item={item} onClose={onClose} canEdit={canEdit} />}
+      {item && <Body key={item.id} item={item} onClose={onClose} canEdit={canEdit} selection={selection} />}
     </Modal>
   );
 }
 
-function Body({ item, onClose, canEdit }: { item: LibraryItem; onClose: () => void; canEdit: boolean }) {
+function Body({ item, onClose, canEdit, selection }: { item: LibraryItem; onClose: () => void; canEdit: boolean; selection?: PreviewSelection }) {
   const qc = useQueryClient();
   const [title, setTitle] = useState(item.title ?? '');
   const [description, setDescription] = useState(item.description);
@@ -81,7 +84,12 @@ function Body({ item, onClose, canEdit }: { item: LibraryItem; onClose: () => vo
           <Textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={5000} readOnly={!canEdit} />
         </Field>
         <TagInput label="Tags" value={tags} onChange={setTags} disabled={!canEdit} />
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
+          {selection && (
+            <Button type="button" className="mr-auto" aria-pressed={selection.selected} onClick={selection.toggle}>
+              <Check className="size-4" /> {selection.selected ? `Selected · ${selection.total.toLocaleString()} in total` : 'Select'}
+            </Button>
+          )}
           <Button type="button" onClick={onClose}>{canEdit ? 'Cancel' : 'Close'}</Button>
           {canEdit && <Button type="submit" variant="primary" loading={save.isPending}>Save</Button>}
         </div>

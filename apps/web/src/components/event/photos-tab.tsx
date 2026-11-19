@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { AlertTriangle, Check, CheckSquare, Eye, EyeOff, Play, RotateCcw, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, CheckSquare, Eye, EyeOff, Maximize2, Play, RotateCcw, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { UploadPanel } from '../upload-panel';
@@ -205,6 +205,15 @@ export function PhotosTab({ event }: { event: EventItem }) {
                       </span>
                     </button>
                   )}
+                  <button
+                    type="button"
+                    {...sel.previewProps(() => setOpen(p))}
+                    aria-label={`Preview ${displayName(p)}`}
+                    title="Preview (keeps your selection)"
+                    className={clsx('absolute right-0 top-0 grid size-11 place-items-center transition-opacity focus-visible:opacity-100', sel.selecting ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100')}
+                  >
+                    <span className="grid size-7 place-items-center rounded-full bg-black/55 text-white shadow transition-colors hover:bg-black/80"><Maximize2 className="size-3.5" aria-hidden /></span>
+                  </button>
                   {event.coverPhotoId === p.id && <span className="pointer-events-none absolute right-1.5 bottom-6"><Badge tone="accent">Cover</Badge></span>}
                   {p.mediaType === 'video' && p.thumbUrl && (
                     <span className="pointer-events-none absolute inset-0 grid place-items-center">
@@ -214,7 +223,7 @@ export function PhotosTab({ event }: { event: EventItem }) {
                   {p.mediaType === 'video' && p.durationSeconds != null && <span className="pointer-events-none absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[11px] tabular-nums text-white">{duration(p.durationSeconds)}</span>}
                   {p.status !== 'ready' && <span className="absolute bottom-1.5 left-1.5"><Badge tone={statusTone(p.status)}>{label(p.status)}</Badge></span>}
                   {p.status === 'ready' && <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/70 to-transparent px-2 pb-1 pt-4 text-[11px] text-white" style={{ paddingRight: p.mediaType === 'video' ? '3.5rem' : undefined }}>{displayName(p)}</span>}
-                  {p.isHidden && <EyeOff className="absolute right-1.5 top-1.5 size-4 text-white drop-shadow" aria-label="Hidden" />}
+                  {p.isHidden && <EyeOff className="pointer-events-none absolute right-3 top-11 size-4 text-white drop-shadow" aria-label="Hidden" />}
                 </li>
                 );
               })}
@@ -239,6 +248,11 @@ export function PhotosTab({ event }: { event: EventItem }) {
             </dl>
             {open.error && <ErrorNote error={new Error(open.error)} />}
             <div className="flex flex-wrap justify-end gap-2">
+              {!contributor && (
+                <Button className="mr-auto" aria-pressed={selected.has(open.id)} onClick={() => sel.apply(selected.has(open.id) ? [] : [open.id], selected.has(open.id) ? [open.id] : [])}>
+                  <Check className="size-4" /> {selected.has(open.id) ? `Selected · ${selected.size.toLocaleString()} in total` : 'Select'}
+                </Button>
+              )}
               {open.status === 'failed' && (!contributor || open.uploaderId === user?.id) && <Button onClick={() => retryOne.mutate(open.id)} loading={retryOne.isPending}><RotateCcw className="size-4" /> Retry processing</Button>}
               {!contributor && open.status === 'ready' && <Button onClick={() => setCover.mutate(open.id)}>Set as cover</Button>}
               {open.status !== 'pending_upload' && <Button onClick={async () => { const r = await api<{ url: string }>(`/photos/${open.id}/original`); window.open(r.url, '_blank'); }}>Download original</Button>}

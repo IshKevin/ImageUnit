@@ -11,7 +11,11 @@ import { useCallback, useEffect, useRef, type MouseEvent, type PointerEvent } fr
  *  - press and drag across tiles to select (or deselect) a whole run at once, scrolling when the pointer nears the
  *    top or bottom of the window. With a mouse the drag can start anywhere on a tile; on touch screens it starts on the
  *    check mark so the page still scrolls normally;
- *  - Esc clears the selection; Ctrl/Cmd+A selects every tile on the page.
+ *  - Esc clears the selection; Ctrl/Cmd+A selects every tile on the page. Neither applies while a dialog (such as a
+ *    preview) is open, so closing a preview with Esc keeps the selection.
+ *
+ * Opening an item while selecting is done with a separate preview button (spread `previewProps(open)`), which never
+ * changes the selection.
  *
  * The grid marks each tile with `data-sel-idx` (spread `tileProps(i)`) and each check mark with `checkboxProps(i)`.
  */
@@ -172,8 +176,9 @@ export function useGridSelection({ ids, isSelected, apply, clear, count, enabled
         set(list, []);
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // Capture phase: runs before the browser closes an open dialog on Esc, so the check above still sees it open.
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
   /** Props for a tile (the element that holds the photo and its check mark). */
@@ -209,5 +214,11 @@ export function useGridSelection({ ids, isSelected, apply, clear, count, enabled
     style: { touchAction: 'none' as const },
   });
 
-  return { tileProps, checkboxProps, handleTileClick, selecting: count > 0 };
+  /** Props for a tile's preview button: opens the item and leaves the selection exactly as it is. */
+  const previewProps = (open: () => void) => ({
+    onPointerDown: (e: PointerEvent) => e.stopPropagation(), // not the start of a selection drag
+    onClick: (e: MouseEvent) => { e.stopPropagation(); e.preventDefault(); open(); },
+  });
+
+  return { tileProps, checkboxProps, previewProps, handleTileClick, apply: (on: string[], off: string[]) => live.current.apply(on, off), selecting: count > 0 };
 }
