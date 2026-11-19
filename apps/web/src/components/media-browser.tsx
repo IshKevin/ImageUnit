@@ -8,6 +8,7 @@ import { BulkBar } from './media/bulk-bar';
 import { DetailModal } from './media/detail-modal';
 import { EventPicker, useDebounced } from './media/parts';
 import { Button, Card, EmptyState, ErrorNote, Input, Pagination, Select, Spinner } from './ui';
+import { useGridSelection } from '@/lib/use-grid-selection';
 import { get, qs, type LibraryFilter, type LibraryItem, type Paged, type PhotoStatus, type Selection } from '@/lib/api';
 import { can, useMe } from '@/lib/auth';
 import { displayName, duration } from '@/lib/format';
@@ -47,7 +48,6 @@ export function MediaBrowser({ mode, baseFilter, collectionId, onSelectionChange
   const [allMatching, setAllMatching] = useState(false);
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<LibraryItem | null>(null);
-  const lastIdx = useRef<number | null>(null);
   const searchId = useId();
 
   const dq = useDebounced(ui.q.trim(), 300);
@@ -72,7 +72,6 @@ export function MediaBrowser({ mode, baseFilter, collectionId, onSelectionChange
     setIds(new Set());
     setAllMatching(false);
     setExcluded(new Set());
-    lastIdx.current = null;
   }, []);
   // A different result set invalidates the selection and the page.
   useEffect(() => {
@@ -109,20 +108,12 @@ export function MediaBrowser({ mode, baseFilter, collectionId, onSelectionChange
     cb.current?.(selection, count);
   }, [selection, count]);
 
-  const setOne = (id: string, on: boolean) => {
-    if (allMatching) setExcluded((s) => { const n = new Set(s); if (on) n.delete(id); else n.add(id); return n; });
-    else setIds((s) => { const n = new Set(s); if (on) n.add(id); else n.delete(id); return n; });
+  /** Selects `on` and deselects `off` (in "all results" mode that means editing the exclusions). */
+  const apply = (on: string[], off: string[]) => {
+    if (allMatching) setExcluded((s) => { const n = new Set(s); on.forEach((id) => n.delete(id)); off.forEach((id) => n.add(id)); return n; });
+    else setIds((s) => { const n = new Set(s); on.forEach((id) => n.add(id)); off.forEach((id) => n.delete(id)); return n; });
   };
-  const toggle = (i: number, shift: boolean) => {
-    const target = !isSel(items[i]!.id);
-    if (shift && lastIdx.current !== null) {
-      const [a, b] = [Math.min(lastIdx.current, i), Math.max(lastIdx.current, i)];
-      const range = items.slice(a, b + 1).map((x) => x.id);
-      if (allMatching) setExcluded((s) => { const n = new Set(s); range.forEach((id) => (target ? n.delete(id) : n.add(id))); return n; });
-      else setIds((s) => { const n = new Set(s); range.forEach((id) => (target ? n.add(id) : n.delete(id))); return n; });
-    } else setOne(items[i]!.id, target);
-    lastIdx.current = i;
-  };
+  const sel = useGridSelection({ ids: items.map((x) => x.id), isSelected: isSel, apply, clear, count });
   const pageAll = items.length > 0 && items.every((x) => isSel(x.id));
   const togglePage = () => {
     const pageIds = items.map((x) => x.id);
@@ -189,6 +180,9 @@ export function MediaBrowser({ mode, baseFilter, collectionId, onSelectionChange
           {toolbarExtra}
         </div>
       </div>
+      {items.length > 0 && (
+        <p className="hidden text-xs text-muted sm:block">Tip: drag across items to select many at once · Shift-click selects a range · Ctrl/⌘-click adds one · Esc clears</p>
+      )}
 
       {count > 0 && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-accent/10 px-4 py-2 text-sm">
@@ -222,17 +216,22 @@ export function MediaBrowser({ mode, baseFilter, collectionId, onSelectionChange
         ) : items.length === 0 ? (
           <EmptyState title={hasFilters ? 'No media matches your filters' : 'No media here yet'} description={hasFilters ? 'Try a different search or clear the filters.' : undefined} action={hasFilters ? <Button onClick={() => setUi(EMPTY)}>Clear filters</Button> : undefined} />
         ) : (
-          <ul className={clsx('grid grid-cols-2 gap-3 p-4 transition-opacity sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6', list.isPlaceholderData && 'opacity-60')}>
+          <ul className={clsx('grid select-none grid-cols-2 gap-3 p-4 transition-opacity sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6', list.isPlaceholderData && 'opacity-60')}>
             {items.map((m, i) => {
-              const sel = isSel(m.id);
+              const isOn = isSel(m.id);
               const name = displayName(m);
               return (
-                <li key={m.id} className="group relative">
-                  <button type="button" onClick={() => setOpen(m)} className="block w-full text-left" aria-label={`Open details for ${name}`}>
-                    <div className={clsx('relative aspect-square overflow-hidden rounded-lg border bg-surface-2', sel ? 'border-accent ring-2 ring-accent' : 'border-border')}>
+                <li key={m.id} {...sel.tileProps(i)} className="group relative">
+                  <button
+                    type="button"
+                    onClick={(e) => { if (!sel.handleTileClick(e, i)) setOpen(m); }}
+                    className="block w-full text-left"
+                    aria-label={sel.selecting ? `${isOn ? 'Deselect' : 'Select'} ${name}` : `Open details for ${name}`}
+                  >
+                    <div className={clsx('relative aspect-square overflow-hidden rounded-lg border bg-surface-2', isOn ? 'border-accent ring-[3px] ring-accent' : 'border-border')}>
                       {m.thumbUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={m.thumbUrl} alt="" loading="lazy" className="size-full object-cover" />
+                        <img src={m.thumbUrl} alt="" loading="lazy" draggable={false} className={clsx('size-full object-cover transition-transform duration-150', isOn && 'scale-[0.94]')} />
                       ) : (
                         <div className="grid size-full place-items-center text-muted">{m.mediaType === 'video' ? <Film className="size-8" aria-hidden /> : <ImageIcon className="size-8" aria-hidden />}</div>
                       )}
@@ -253,19 +252,21 @@ export function MediaBrowser({ mode, baseFilter, collectionId, onSelectionChange
                   </button>
                   <button
                     type="button"
-                    aria-pressed={sel}
+                    {...sel.checkboxProps(i)}
+                    aria-pressed={isOn}
                     aria-label={`Select ${name}`}
-                    onClick={(e) => toggle(i, e.shiftKey)}
-                    className={clsx('absolute left-2 top-2 grid size-6 place-items-center rounded-md border shadow transition-opacity focus-visible:opacity-100', sel ? 'border-accent bg-accent text-accent-fg opacity-100' : 'border-white/80 bg-black/40 text-transparent opacity-70 group-hover:opacity-100 sm:opacity-0')}
+                    className={clsx('absolute left-0 top-0 grid size-11 place-items-center transition-opacity focus-visible:opacity-100', isOn || sel.selecting ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100')}
                   >
-                    <Check className="size-4" aria-hidden />
+                    <span className={clsx('grid size-6 place-items-center rounded-md border-2 shadow', isOn ? 'border-accent bg-accent text-accent-fg' : 'border-white bg-black/40 text-white/0 hover:text-white/80')}>
+                      <Check className="size-4" aria-hidden />
+                    </span>
                   </button>
                 </li>
               );
             })}
           </ul>
         )}
-        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={(p) => { setPage(p); lastIdx.current = null; }} />
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
       </Card>
 
       <DetailModal item={open} onClose={() => setOpen(null)} canEdit={canEdit} />

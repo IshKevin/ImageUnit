@@ -65,6 +65,23 @@ describe('upload and processing', () => {
     }
   });
 
+  it('"select all" returns every matching id across pages, honouring the filters and the event', async () => {
+    const owner = await session(t);
+    const ev = await makeEvent(owner);
+    const other = await makeEvent(owner);
+    const files = (n: number, ext = 'jpg', type = 'image/jpeg') => Array.from({ length: n }, (_, i) => ({ filename: `F_${i}.${ext}`, contentType: type, sizeBytes: 100 }));
+    const imgs = (await owner.post(`/api/events/${ev.id}/uploads`, { files: files(130) })).json().uploads as { photoId: string }[];
+    const vids = (await owner.post(`/api/events/${ev.id}/uploads`, { files: files(3, 'mp4', 'video/mp4') })).json().uploads as { photoId: string }[];
+    await owner.post(`/api/events/${other.id}/uploads`, { files: files(5) });
+
+    const all = await owner.get(`/api/events/${ev.id}/photo-ids`);
+    expect(all.statusCode).toBe(200);
+    expect(new Set(all.json().ids)).toEqual(new Set([...imgs, ...vids].map((u) => u.photoId))); // more than one page (60), none from the other event
+    expect(new Set((await owner.get(`/api/events/${ev.id}/photo-ids?type=video`)).json().ids)).toEqual(new Set(vids.map((u) => u.photoId)));
+    expect((await owner.get(`/api/events/${ev.id}/photo-ids?status=ready`)).json().ids).toEqual([]);
+    expect([403, 404]).toContain((await (await session(t)).get(`/api/events/${ev.id}/photo-ids`)).statusCode); // someone else's event
+  });
+
   it('retries, instead of permanently failing, when storage is briefly unreachable during processing', async () => {
     const owner = await session(t);
     const ev = await makeEvent(owner);

@@ -12,6 +12,8 @@ import { publicStorageProblem } from '../lib/storage-config.js';
 import { ALLOWED_TYPES, downloadName, mediaKindOf, normalizeTags, photoKeys } from '../lib/media.js';
 
 const MAX_BATCH = 200;
+/** Most ids "select all" returns in one go. */
+const MAX_SELECT_IDS = 50_000;
 
 export const photoRoutes: FastifyPluginAsync = async (app) => {
   const ctx = app.ctx;
@@ -284,6 +286,31 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
       ctx.db.select({ total: count() }).from(photos).where(where),
     ]);
     return { items: await Promise.all(rows.map(photoView)), total, page, pageSize };
+  });
+
+  /**
+   * Ids of every item matching the grid's filters, so "select all" can cover all pages at once
+   * (bulk actions then send them in chunks). Same filters and access rules as the list above.
+   */
+  app.get('/events/:id/photo-ids', { preHandler: guard.perm('events:view') }, async (req) => {
+    const q = parse(
+      z.object({
+        status: z.enum(['pending_upload', 'uploaded', 'processing', 'ready', 'failed']).optional(),
+        galleryId: z.string().uuid().optional(),
+        hidden: z.enum(['true', 'false']).optional(),
+        type: z.enum(['image', 'video']).optional(),
+      }),
+      req.query,
+    );
+    const ev = await loadManagedEvent(ctx, req, (req.params as { id: string }).id, 'contribute');
+    const conds: SQL[] = [eq(photos.eventId, ev.id)];
+    if (q.status) conds.push(eq(photos.status, q.status));
+    if (q.galleryId) conds.push(eq(photos.galleryId, q.galleryId));
+    if (q.hidden) conds.push(eq(photos.isHidden, q.hidden === 'true'));
+    if (q.type) conds.push(eq(photos.mediaType, q.type));
+    const rows = await ctx.db.select({ id: photos.id }).from(photos).where(and(...conds)).orderBy(asc(photos.sortOrder), asc(photos.takenAt), desc(photos.createdAt)).limit(MAX_SELECT_IDS + 1);
+    if (rows.length > MAX_SELECT_IDS) throw badRequest(`More than ${MAX_SELECT_IDS.toLocaleString('en')} items match; narrow the filter (for example by gallery) and try again`);
+    return { ids: rows.map((r) => r.id) };
   });
 
   app.get('/events/:id/upload-summary', { preHandler: guard.perm('events:view') }, async (req) => {
